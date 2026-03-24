@@ -68,7 +68,7 @@ with st.sidebar:
     st.divider()
     menu = st.radio(
         "Navegación:",
-        ["🏠 Inventario", "📝 Nuevo Contrato", "💰 Cobranzas", "🚨 Morosos", "📊 Caja", "⚙️ Configuración"],
+        ["🏠 Inventario", "📝 Nuevo Contrato", "💰 Cobranzas", "🚨 Morosos", "📊 Caja", "⚙️ Maestros"],
         label_visibility="collapsed"
     )
 
@@ -226,7 +226,7 @@ elif menu == "🚨 Morosos":
 # ---------------------------------------------------------
 # 5. CONFIGURACIÓN (RESTAURADO COMPLETO)
 # ---------------------------------------------------------
-elif menu == "⚙️ Configuración":
+elif menu == "⚙️ Maestros":
     st.subheader("Carga de Datos Maestros")
     tab1, tab2, tab3, tab4 = st.tabs(["👤 Inquilinos", "🏢 Bloques", "🏠 Unidades", "⚡ Procesos"])
     
