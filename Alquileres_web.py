@@ -170,3 +170,135 @@ if menu == "🏠 Inventario":
         use_container_width=True, 
         hide_index=True
     )
+
+# ---------------------------------------------------------
+# 2. MÓDULO: NUEVO CONTRATO (CON CÁLCULO DE VENCIMIENTO)
+# ---------------------------------------------------------
+elif menu == "📝 Nuevo Contrato":
+    st.subheader("Carga de Nuevo Contrato")
+    conn = conectar()
+    
+    # Filtramos solo inmuebles que están "Libres" o "Vencidos" según nuestra lógica previa
+    # Para simplificar al usuario, traemos todos y el sistema valida.
+    inm_db = pd.read_sql_query("SELECT id, tipo, precio_alquiler FROM inmuebles", conn)
+    inq_db = pd.read_sql_query("SELECT id, nombre FROM inquilinos", conn)
+
+    if not inq_db.empty and not inm_db.empty:
+        with st.form("form_nuevo_contrato"):
+            c1, c2 = st.columns(2)
+            
+            id_inm = c1.selectbox(
+                "Seleccionar Unidad", 
+                inm_db['id'].tolist(), 
+                format_func=lambda x: f"Unidad {x} - {inm_db[inm_db['id']==x]['tipo'].values[0]}"
+            )
+            
+            id_inq = c2.selectbox(
+                "Seleccionar Inquilino", 
+                inq_db['id'].tolist(), 
+                format_func=lambda x: inq_db[inq_db['id']==x]['nombre'].values[0]
+            )
+            
+            f_inicio = c1.date_input("Fecha de Inicio", date.today())
+            meses_duracion = c2.number_input("Meses de Contrato", min_value=1, value=12)
+            
+            # CÁLCULO AUTOMÁTICO DE FECHA FIN
+            # Usamos aproximación de 30 días para el vencimiento
+            f_finalizacion = f_inicio + timedelta(days=meses_duracion * 30)
+            
+            st.info(f"📅 **Vencimiento del Contrato:** {f_finalizacion.strftime('%d/%m/%Y')}")
+            
+            monto_alq = c1.number_input("Monto Alquiler Mensual ($)", value=0.0)
+            
+            if st.form_submit_button("✅ GUARDAR CONTRATO"):
+                cursor = conn.cursor()
+                # Insertamos con la nueva estructura que creamos en la Parte 1
+                cursor.execute("""
+                    INSERT INTO contratos (
+                        id_inmueble, id_inquilino, fecha_inicio, fecha_fin, 
+                        meses, activo, monto_alquiler
+                    ) VALUES (?, ?, ?, ?, ?, 1, ?)
+                """, (id_inm, id_inq, f_inicio, f_finalizacion, meses_duracion, monto_alq))
+                
+                # Sincronizamos el estado estático por compatibilidad
+                cursor.execute("UPDATE inmuebles SET estado = 'Ocupado' WHERE id = ?", (id_inm,))
+                
+                conn.commit()
+                st.success(f"Contrato registrado. La unidad figurará como ocupada hasta el {f_finalizacion.strftime('%d/%m/%Y')}")
+                st.rerun()
+    else:
+        st.error("Asegúrese de tener Inmuebles e Inquilinos cargados en la base de datos.")
+
+# ---------------------------------------------------------
+# 3. MÓDULO: COBRANZAS (CON RECIBO WHATSAPP)
+# ---------------------------------------------------------
+elif menu == "💰 Cobranzas":
+    st.subheader("Gestión de Cobros y Recibos")
+    conn = conectar()
+    
+    # Query que une deudas con datos de contacto para el WhatsApp
+    query_cobros = """
+        SELECT 
+            d.id, i.tipo as Unidad, inq.nombre as Inquilino, inq.celular,
+            d.concepto, d.monto_debe, d.monto_pago
+        FROM deudas d
+        JOIN contratos c ON d.id_contrato = c.id
+        JOIN inmuebles i ON c.id_inmueble = i.id
+        JOIN inquilinos inq ON c.id_inquilino = inq.id
+        WHERE d.pagado = 0
+    """
+    
+    df_c = pd.read_sql_query(query_cobros, conn)
+    
+    if not df_c.empty:
+        for _, row in df_c.iterrows():
+            with st.expander(f"📍 {row['Unidad']} - {row['Inquilino']} ({row['concepto']})"):
+                # Cálculo de saldos usando floats seguros
+                pendiente = float(row['monto_debe']) - float(row['monto_pago'])
+                st.write(f"Saldo Pendiente: **{fmt_moneda(pendiente)}**")
+                
+                cobro_parcial = st.number_input(
+                    f"Monto a cobrar", 
+                    min_value=0.0, 
+                    max_value=pendiente, 
+                    key=f"input_{row['id']}",
+                    step=1000.0
+                )
+                
+                if st.button(f"Confirmar Cobro", key=f"btn_{row['id']}"):
+                    cursor = conn.cursor()
+                    nuevo_total_pago = float(row['monto_pago']) + cobro_parcial
+                    estado_final = 1 if nuevo_total_pago >= float(row['monto_debe']) else 0
+                    
+                    cursor.execute("""
+                        UPDATE deudas SET monto_pago=?, pagado=?, fecha_cobro=? WHERE id=?
+                    """, (nuevo_total_pago, estado_pago, date.today(), row['id']))
+                    conn.commit()
+                    
+                    # --- GENERACIÓN DE RECIBO PARA WHATSAPP ---
+                    texto_recibo = (
+                        f"✅ *RECIBO DE PAGO - INMOBILIARIA*\n\n"
+                        f"Unidad: *{row['Unidad']}*\n"
+                        f"Inquilino: *{row['Inquilino']}*\n"
+                        f"Concepto: {row['concepto']}\n"
+                        f"Monto Abonado: *{fmt_moneda(cobro_parcial)}*\n"
+                        f"Fecha: {date.today().strftime('%d/%m/%Y')}\n\n"
+                        f"Saldo Restante: *{fmt_moneda(pendiente - cobro_parcial)}*\n"
+                        f"¡Muchas gracias!"
+                    )
+                    
+                    # Guardamos el link en el estado de la sesión para mostrar el botón
+                    st.session_state[f'wa_link_{row["id"]}'] = crear_link_whatsapp(row['celular'], texto_recibo)
+                    st.success("Cobro impactado correctamente.")
+                
+                # Si el pago se realizó, mostramos el botón de WhatsApp con estilo iPad
+                if f'wa_link_{row["id"]}' in st.session_state:
+                    st.markdown(f"""
+                        <a href="{st.session_state[f'wa_link_{row["id"]}']}" target="_blank">
+                            <button style="background-color:#25D366; color:white; border:none; padding:12px 20px; border-radius:8px; cursor:pointer; width:100%; font-weight:bold;">
+                                📲 Enviar Recibo por WhatsApp
+                            </button>
+                        </a>
+                    """, unsafe_allow_html=True)
+    else:
+        st.info("No hay deudas pendientes de cobro.")
