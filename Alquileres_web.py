@@ -43,67 +43,110 @@ st.title("🏢 Gestión Inmobiliaria Pro - Cloud Edition")
 
 menu = st.sidebar.selectbox("MENÚ", ["🏠 Inventario", "✍️ Contratos", "📋 Cobranzas", "📊 Caja"])
 
+
 # ---------------------------------------------------------
-# 1. INVENTARIO (CON FILTROS DE ESTADO Y BLOQUE)
+# 1. INVENTARIO INTELIGENTE (BASADO EN FECHAS DE CONTRATO)
 # ---------------------------------------------------------
 if menu == "🏠 Inventario":
-    st.subheader("Estado de Unidades")
+    st.subheader("Estado y Disponibilidad Predictiva")
     conn = conectar()
-    
-    # --- FILTROS ---
+    hoy = date.today()
+
+    # --- LÓGICA DE FILTROS ---
     f1, f2, f3 = st.columns([2, 2, 2])
+    filtro_estado = f1.selectbox("Estado Actual", ["TODOS", "Libre Ahora", "Ocupado Ahora"])
     
-    # Filtro por Estado (Tu requerimiento)
-    filtro_estado = f1.selectbox("Filtrar por Estado", ["TODOS", "Libre", "Ocupado"])
-    
-    # Filtro por Bloque (Obtenido dinámicamente)
-    bloques_db = pd.read_sql_query("SELECT nombre FROM bloques", conn)
+    bloques_db = pd.read_sql_query("SELECT id, nombre FROM bloques", conn)
     filtro_bloque = f2.selectbox("Filtrar por Bloque", ["TODOS"] + bloques_db['nombre'].tolist())
     
-    # Buscador de texto
-    busqueda = f3.text_input("Buscar por ID o Tipo...")
+    busqueda = f3.text_input("Buscar Unidad...")
 
-    # --- QUERY CONSTRUCCIÓN ---
-    query_inv = """
-        SELECT i.id, b.nombre as Bloque, i.tipo as Unidad, i.estado as Estado, 
-               i.precio_alquiler as Alquiler, i.costo_contrato as Contrato, i.deposito_base as Deposito
+    # --- QUERY MAESTRA ---
+    # Traemos los inmuebles y el contrato activo más reciente si existe
+    query_base = """
+        SELECT 
+            i.id, 
+            b.nombre as Bloque, 
+            i.tipo as Unidad, 
+            c.fecha_inicio, 
+            c.meses,
+            i.precio_alquiler
         FROM inmuebles i
         JOIN bloques b ON i.id_bloque = b.id
-        WHERE 1=1
+        LEFT JOIN contratos c ON i.id = c.id_inmueble AND c.activo = 1
     """
-    params = []
+    
+    df_raw = pd.read_sql_query(query_base, conn)
 
-    if filtro_estado != "TODOS":
-        query_inv += " AND i.estado = ?"
-        params.append(filtro_estado)
+    # --- CÁLCULO DE ESTADOS DINÁMICOS ---
+    def calcular_disponibilidad(row):
+        if pd.isna(row['fecha_inicio']):
+            return "Libre", "Inmediata"
+        
+        # Calculamos fecha de fin: inicio + meses
+        try:
+            inicio = datetime.strptime(row['fecha_inicio'], '%Y-%m-%d').date()
+            fin = inicio + timedelta(days=row['meses'] * 30) # Estimación de meses
+            
+            if hoy < inicio:
+                return "Libre (Reservado)", inicio.strftime('%d/%m/%Y')
+            elif hoy <= fin:
+                return "Ocupado", fin.strftime('%d/%m/%Y')
+            else:
+                return "Libre (Contrato Vencido)", "Inmediata"
+        except:
+            return "Error Datos", "Consultar"
+
+    # Aplicamos la lógica a cada fila
+    df_raw[['Estado Real', 'Disponible Desde']] = df_raw.apply(
+        lambda x: pd.Series(calcular_disponibilidad(x)), axis=1
+    )
+
+    # --- APLICACIÓN DE FILTROS POST-CÁLCULO ---
+    df_final = df_raw.copy()
+    
+    if filtro_estado == "Libre Ahora":
+        df_final = df_final[df_final['Estado Real'].str.contains("Libre")]
+    elif filtro_estado == "Ocupado Ahora":
+        df_final = df_final[df_final['Estado Real'] == "Ocupado"]
         
     if filtro_bloque != "TODOS":
-        query_inv += " AND b.nombre = ?"
-        params.append(filtro_bloque)
+        df_final = df_final[df_final['Bloque'] == filtro_bloque]
         
     if busqueda:
-        query_inv += " AND (i.tipo LIKE ? OR i.id LIKE ?)"
-        params.extend([f"%{busqueda}%", f"%{busqueda}%"])
-
-    df_inv = pd.read_sql_query(query_inv, conn, params=params)
+        df_final = df_final[df_final['Unidad'].str.contains(busqueda, case=False)]
 
     # --- VISUALIZACIÓN ---
-    if not df_inv.empty:
-        # Aplicamos colores para identificar rápido el estado
-        def color_estado(val):
-            color = '#2ecc71' if val == 'Libre' else '#e74c3c'
+    if not df_final.empty:
+        # Estilo para iPad: Colores claros y legibles
+        def style_estado(val):
+            if "Libre" in val: color = '#2ecc71'
+            elif "Ocupado" in val: color = '#e74c3c'
+            else: color = '#f39c12'
             return f'color: {color}; font-weight: bold'
 
-        st.dataframe(df_inv.style.applymap(color_estado, subset=['Estado']), 
-                     use_container_width=True, hide_index=True)
+        # Mostramos columnas relevantes
+        cols_mostrar = ["Bloque", "Unidad", "Estado Real", "Disponible Desde", "precio_alquiler"]
+        st.dataframe(
+            df_final[cols_mostrar].style.applymap(style_estado, subset=['Estado Real']),
+            use_container_width=True,
+            hide_index=True
+        )
         
-        # Métricas rápidas según el filtro
-        m1, m2 = st.columns(2)
-        m1.metric("Total Unidades en vista", len(df_inv))
-        libres = len(df_inv[df_inv['Estado'] == 'Libre'])
-        m2.metric("Disponibles", libres, delta=f"{libres/len(df_inv)*100:.1f}%")
+        # VENTANA DE FUTURO (Punto 2 del requerimiento)
+        st.divider()
+        st.write("### 📅 Próximas Liberaciones")
+        # Filtramos los que se liberan en los próximos 60 días
+        df_futuro = df_final[df_final['Estado Real'] == "Ocupado"].sort_values(by="Disponible Desde")
+        if not df_futuro.empty:
+            for _, r in df_futuro.head(5).iterrows():
+                st.info(f"La unidad **{r['Unidad']}** ({r['Bloque']}) se liberará el **{r['Disponible Desde']}**")
+        else:
+            st.success("No hay liberaciones programadas en el corto plazo.")
+            
     else:
-        st.warning("No se encontraron inmuebles con los filtros seleccionados.")
+        st.warning("No hay inmuebles que coincidan con la búsqueda.")
+
 # ---------------------------------------------------------
 # 2. CONTRATOS (Generación automática de deudas)
 # ---------------------------------------------------------
