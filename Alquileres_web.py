@@ -4,49 +4,46 @@ import pandas as pd
 from datetime import datetime, date, timedelta
 import urllib.parse
 import os
-import io
 
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Inmobiliaria Pro Cloud", layout="wide", initial_sidebar_state="expanded")
 
 # --- 2. FUNCIONES DE MOTOR ---
 def conectar():
-    return sqlite3.connect('datos_alquileres.db', check_same_thread=False, timeout=10)
+    # Timeout alto para evitar bloqueos en Streamlit Cloud
+    return sqlite3.connect('datos_alquileres.db', check_same_thread=False, timeout=20)
 
 def fmt_moneda(valor):
-    """Visualización profesional: $ 1.250.000"""
     try:
         return f"$ {int(float(valor or 0)):,}".replace(",", ".")
     except:
         return "$ 0"
 
 def limpiar_monto(texto):
-    """Limpia puntos y convierte a número para la DB"""
     if not texto: return 0.0
     try:
         return float(str(texto).replace('$', '').replace('.', '').replace(',', '').strip())
     except:
         return 0.0
 
-def inicializar_absoluto():
-    if os.path.exists('datos_alquileres.db'):
-        os.remove('datos_alquileres.db')
+def crear_db_si_no_existe():
+    """Crea el esquema completo con todas las columnas necesarias"""
     conn = conectar()
     c = conn.cursor()
     c.executescript('''
-        CREATE TABLE bloques (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE);
-        CREATE TABLE inmuebles (
+        CREATE TABLE IF NOT EXISTS bloques (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE);
+        CREATE TABLE IF NOT EXISTS inmuebles (
             id INTEGER PRIMARY KEY AUTOINCREMENT, id_bloque INTEGER, tipo TEXT, 
             precio_alquiler REAL, costo_contrato REAL, deposito_base REAL,
             UNIQUE(id_bloque, tipo)
         );
-        CREATE TABLE inquilinos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT, celular TEXT);
-        CREATE TABLE contratos (
+        CREATE TABLE IF NOT EXISTS inquilinos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT, celular TEXT);
+        CREATE TABLE IF NOT EXISTS contratos (
             id INTEGER PRIMARY KEY AUTOINCREMENT, id_inmueble INTEGER, id_inquilino INTEGER, 
             fecha_inicio DATE, fecha_fin DATE, meses INTEGER, activo INTEGER DEFAULT 1, 
             monto_alquiler REAL, monto_contrato REAL, monto_deposito REAL
         );
-        CREATE TABLE deudas (
+        CREATE TABLE IF NOT EXISTS deudas (
             id INTEGER PRIMARY KEY AUTOINCREMENT, id_contrato INTEGER, concepto TEXT, 
             mes_anio TEXT, monto_debe REAL, monto_pago REAL DEFAULT 0, pagado INTEGER DEFAULT 0, fecha_cobro DATE
         );
@@ -54,16 +51,32 @@ def inicializar_absoluto():
     conn.commit()
     conn.close()
 
-if not os.path.exists('datos_alquileres.db'):
-    inicializar_absoluto()
+def vaciar_base_de_datos():
+    """Borra todos los registros de todas las tablas de forma segura"""
+    conn = conectar()
+    c = conn.cursor()
+    tablas = ["deudas", "contratos", "inquilinos", "inmuebles", "bloques"]
+    for t in tablas:
+        try:
+            c.execute(f"DELETE FROM {t}")
+            c.execute(f"UPDATE sqlite_sequence SET seq = 0 WHERE name = '{t}'")
+        except:
+            pass
+    conn.commit()
+    conn.close()
+
+# Inicialización obligatoria
+crear_db_si_no_existe()
 
 # --- 3. MENÚ LATERAL ---
 with st.sidebar:
     st.title("🏢 Inmobiliaria Pro")
-    if st.button("🚨 REINICIAR TODA LA BASE"):
-        inicializar_absoluto()
+    if st.button("🚨 REINICIAR TODA LA BASE (BORRADO TOTAL)"):
+        vaciar_base_de_datos()
         st.cache_data.clear()
+        st.success("¡Base de datos vaciada por completo!")
         st.rerun()
+    
     st.divider()
     menu = st.radio(
         "Navegación:",
@@ -72,10 +85,10 @@ with st.sidebar:
     )
 
 # ---------------------------------------------------------
-# 1. INVENTARIO
+# 1. INVENTARIO (SIN DUPLICADOS)
 # ---------------------------------------------------------
 if menu == "🏠 1. Inventario":
-    st.subheader("Estado de Unidades y Disponibilidad")
+    st.subheader("Estado de Unidades")
     conn = conectar()
     hoy = date.today()
     query = """
@@ -178,7 +191,7 @@ elif menu == "📊 5. Caja":
         st.table(df_cj)
 
 # ---------------------------------------------------------
-# 6. MAESTROS (CON EDICIÓN DE INQUILINOS Y UNIDADES)
+# 6. MAESTROS (CON EDICIÓN Y ELIMINACIÓN DE INQUILINOS)
 # ---------------------------------------------------------
 elif menu == "⚙️ 6. Maestros":
     st.subheader("Administración de Maestros")
@@ -190,31 +203,32 @@ elif menu == "⚙️ 6. Maestros":
         with col1:
             st.write("### ➕ Nuevo Inquilino")
             with st.form("f_inq"):
-                nom = st.text_input("Nombre"); tel = st.text_input("Celular (549...)")
+                nom = st.text_input("Nombre"); tel = st.text_input("WhatsApp (549...)")
                 if st.form_submit_button("Guardar"):
                     con.execute("INSERT INTO inquilinos (nombre, celular) VALUES (?,?)", (nom, tel))
                     con.commit(); st.rerun()
         with col2:
-            st.write("### ✏️ Editar Inquilino")
+            st.write("### ✏️ Editar / 🗑️ Eliminar")
             inqs = pd.read_sql_query("SELECT * FROM inquilinos", con)
             if not inqs.empty:
-                id_i = st.selectbox("Seleccionar", inqs['id'].tolist(), format_func=lambda x: inqs[inqs['id']==x]['nombre'].values[0])
+                id_i = st.selectbox("Inquilino", inqs['id'].tolist(), format_func=lambda x: inqs[inqs['id']==x]['nombre'].values[0])
                 curr_i = inqs[inqs['id']==id_i].iloc[0]
+                
                 with st.form("f_inq_edit"):
                     n_nom = st.text_input("Nombre", value=curr_i['nombre'])
                     n_tel = st.text_input("Celular", value=curr_i['celular'])
-                    if st.form_submit_button("Actualizar"):
+                    c_btn1, c_btn2 = st.columns(2)
+                    if c_btn1.form_submit_button("✅ Actualizar"):
                         con.execute("UPDATE inquilinos SET nombre=?, celular=? WHERE id=?", (n_nom, n_tel, id_i))
                         con.commit(); st.success("Actualizado"); st.rerun()
+                    if c_btn2.form_submit_button("🗑️ ELIMINAR"):
+                        con.execute("DELETE FROM inquilinos WHERE id=?", (id_i,))
+                        con.commit(); st.warning("Eliminado"); st.rerun()
+        
         st.write("---")
+        st.write("### Listado Actual")
         st.dataframe(inqs[["nombre", "celular"]], use_container_width=True, hide_index=True)
         con.close()
-
-    with t2:
-        with st.form("f_bl"):
-            nb = st.text_input("Nombre Bloque")
-            if st.form_submit_button("Guardar"):
-                con = conectar(); con.execute("INSERT INTO bloques (nombre) VALUES (?)", (nb,)); con.commit(); con.close(); st.rerun()
 
     with t3:
         con = conectar()
@@ -230,12 +244,10 @@ elif menu == "⚙️ 6. Maestros":
                     co_t = st.text_input("Contrato", value="0")
                     de_t = st.text_input("Depósito", value="0")
                     if st.form_submit_button("Guardar"):
-                        try:
-                            con.execute("INSERT INTO inmuebles (id_bloque, tipo, precio_alquiler, costo_contrato, deposito_base) VALUES (?,?,?,?,?)", (idb, tp, limpiar_monto(pr_t), limpiar_monto(co_t), limpiar_monto(de_t)))
-                            con.commit(); st.rerun()
-                        except: st.error("Unidad duplicada.")
+                        con.execute("INSERT INTO inmuebles (id_bloque, tipo, precio_alquiler, costo_contrato, deposito_base) VALUES (?,?,?,?,?)", (idb, tp, limpiar_monto(pr_t), limpiar_monto(co_t), limpiar_monto(de_t)))
+                        con.commit(); st.rerun()
         with col_b:
-            st.write("### ✏️ Editar Precios")
+            st.write("### ✏️ Editar Precios / 🗑️ Borrar")
             inm_ex = pd.read_sql_query("SELECT i.id, b.nombre || ' - ' || i.tipo as disp FROM inmuebles i JOIN bloques b ON i.id_bloque = b.id", con)
             if not inm_ex.empty:
                 id_ed = st.selectbox("Unidad", inm_ex['id'].tolist(), format_func=lambda x: inm_ex[inm_ex['id']==x]['disp'].values[0])
@@ -244,16 +256,11 @@ elif menu == "⚙️ 6. Maestros":
                     n_pr = st.text_input("Nuevo Alquiler", value=str(int(curr['precio_alquiler'])))
                     n_co = st.text_input("Nuevo Contrato", value=str(int(curr['costo_contrato'])))
                     n_de = st.text_input("Nuevo Depósito", value=str(int(curr['deposito_base'])))
-                    if st.form_submit_button("Actualizar"):
+                    cb1, cb2 = st.columns(2)
+                    if cb1.form_submit_button("✅ Actualizar"):
                         con.execute("UPDATE inmuebles SET precio_alquiler=?, costo_contrato=?, deposito_base=? WHERE id=?", (limpiar_monto(n_pr), limpiar_monto(n_co), limpiar_monto(n_de), id_ed))
                         con.commit(); st.rerun()
+                    if cb2.form_submit_button("🗑️ Borrar Unidad"):
+                        con.execute("DELETE FROM inmuebles WHERE id=?", (id_ed,))
+                        con.commit(); st.rerun()
         con.close()
-
-    with t4:
-        st.write("### Procesos Masivos")
-        mes = st.text_input("Mes/Año (Ej: Junio 2025)")
-        if st.button("🚀 Generar"):
-            con = conectar(); activos = pd.read_sql_query("SELECT id, monto_alquiler FROM contratos WHERE activo=1", con)
-            for _, c in activos.iterrows():
-                con.execute("INSERT INTO deudas (id_contrato, concepto, mes_anio, monto_debe) VALUES (?,?,?,?)", (c['id'], "Alquiler", mes, c['monto_alquiler']))
-            con.commit(); con.close(); st.success("Generado")
