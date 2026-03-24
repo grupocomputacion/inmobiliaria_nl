@@ -44,50 +44,66 @@ st.title("🏢 Gestión Inmobiliaria Pro - Cloud Edition")
 menu = st.sidebar.selectbox("MENÚ", ["🏠 Inventario", "✍️ Contratos", "📋 Cobranzas", "📊 Caja"])
 
 # ---------------------------------------------------------
-# 1. INVENTARIO
+# 1. INVENTARIO (CON FILTROS DE ESTADO Y BLOQUE)
 # ---------------------------------------------------------
 if menu == "🏠 Inventario":
-    col_form, col_tabla = st.columns([1, 2])
+    st.subheader("Estado de Unidades")
+    conn = conectar()
     
-    with col_form:
-        st.subheader("Configuración")
-        with st.expander("➕ Crear Nuevo Bloque"):
-            n_bloque = st.text_input("Nombre del Bloque")
-            if st.button("Guardar Bloque"):
-                conn = conectar()
-                try:
-                    conn.execute("INSERT INTO bloques (nombre) VALUES (?)", (n_bloque,))
-                    conn.commit()
-                    st.success("Bloque creado")
-                except: st.error("Error: El bloque ya existe")
+    # --- FILTROS ---
+    f1, f2, f3 = st.columns([2, 2, 2])
+    
+    # Filtro por Estado (Tu requerimiento)
+    filtro_estado = f1.selectbox("Filtrar por Estado", ["TODOS", "Libre", "Ocupado"])
+    
+    # Filtro por Bloque (Obtenido dinámicamente)
+    bloques_db = pd.read_sql_query("SELECT nombre FROM bloques", conn)
+    filtro_bloque = f2.selectbox("Filtrar por Bloque", ["TODOS"] + bloques_db['nombre'].tolist())
+    
+    # Buscador de texto
+    busqueda = f3.text_input("Buscar por ID o Tipo...")
 
-        st.divider()
-        st.subheader("Nueva Unidad")
-        conn = conectar()
-        bloques = pd.read_sql_query("SELECT * FROM bloques", conn)
+    # --- QUERY CONSTRUCCIÓN ---
+    query_inv = """
+        SELECT i.id, b.nombre as Bloque, i.tipo as Unidad, i.estado as Estado, 
+               i.precio_alquiler as Alquiler, i.costo_contrato as Contrato, i.deposito_base as Deposito
+        FROM inmuebles i
+        JOIN bloques b ON i.id_bloque = b.id
+        WHERE 1=1
+    """
+    params = []
+
+    if filtro_estado != "TODOS":
+        query_inv += " AND i.estado = ?"
+        params.append(filtro_estado)
         
-        if not bloques.empty:
-            b_sel = st.selectbox("Bloque", bloques['nombre'].tolist())
-            id_b = bloques[bloques['nombre'] == b_sel]['id'].values[0]
-            tipo = st.text_input("Nombre Unidad (Ej: Depto 1)")
-            alquiler = st.number_input("Precio Alquiler $", min_value=0.0)
-            contrato = st.number_input("Costo Contrato $", min_value=0.0)
-            deposito = st.number_input("Depósito Base $", min_value=0.0)
-            
-            if st.button("💾 Guardar Unidad"):
-                conn.execute("INSERT INTO inmuebles (id_bloque, tipo, precio_alquiler, costo_contrato, deposito_base) VALUES (?,?,?,?,?)",
-                            (int(id_b), tipo, alquiler, contrato, deposito))
-                conn.commit()
-                st.success("Unidad guardada")
-                st.rerun()
+    if filtro_bloque != "TODOS":
+        query_inv += " AND b.nombre = ?"
+        params.append(filtro_bloque)
+        
+    if busqueda:
+        query_inv += " AND (i.tipo LIKE ? OR i.id LIKE ?)"
+        params.extend([f"%{busqueda}%", f"%{busqueda}%"])
 
-    with col_tabla:
-        st.subheader("Listado de Unidades")
-        df_inm = pd.read_sql_query("""
-            SELECT i.id, b.nombre as Bloque, i.tipo as Unidad, i.precio_alquiler as Alquiler, i.estado as Estado 
-            FROM inmuebles i JOIN bloques b ON i.id_bloque = b.id""", conectar())
-        st.dataframe(df_inm, use_container_width=True)
+    df_inv = pd.read_sql_query(query_inv, conn, params=params)
 
+    # --- VISUALIZACIÓN ---
+    if not df_inv.empty:
+        # Aplicamos colores para identificar rápido el estado
+        def color_estado(val):
+            color = '#2ecc71' if val == 'Libre' else '#e74c3c'
+            return f'color: {color}; font-weight: bold'
+
+        st.dataframe(df_inv.style.applymap(color_estado, subset=['Estado']), 
+                     use_container_width=True, hide_index=True)
+        
+        # Métricas rápidas según el filtro
+        m1, m2 = st.columns(2)
+        m1.metric("Total Unidades en vista", len(df_inv))
+        libres = len(df_inv[df_inv['Estado'] == 'Libre'])
+        m2.metric("Disponibles", libres, delta=f"{libres/len(df_inv)*100:.1f}%")
+    else:
+        st.warning("No se encontraron inmuebles con los filtros seleccionados.")
 # ---------------------------------------------------------
 # 2. CONTRATOS (Generación automática de deudas)
 # ---------------------------------------------------------
