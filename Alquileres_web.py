@@ -25,59 +25,34 @@ def fmt_moneda(valor):
 def init_db():
     conn = conectar()
     c = conn.cursor()
-    # Estructura normalizada con fecha_fin para predictibilidad
-    c.executescript('''
-        CREATE TABLE IF NOT EXISTS bloques (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, 
-            nombre TEXT UNIQUE
-        );
-        CREATE TABLE IF NOT EXISTS inmuebles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, 
-            id_bloque INTEGER, 
-            tipo TEXT, 
-            precio_alquiler REAL, 
-            costo_contrato REAL, 
-            deposito_base REAL, 
-            estado TEXT DEFAULT 'Libre'
-        );
-        CREATE TABLE IF NOT EXISTS inquilinos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, 
-            nombre TEXT, 
-            celular TEXT, 
-            procedencia TEXT, 
-            grupo TEXT, 
-            em_nombre TEXT, 
-            em_tel TEXT
-        );
-        CREATE TABLE IF NOT EXISTS contratos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, 
-            id_inmueble INTEGER, 
-            id_inquilino INTEGER, 
-            fecha_inicio DATE, 
-            fecha_fin DATE, 
-            meses INTEGER, 
-            activo INTEGER DEFAULT 1, 
-            monto_alquiler REAL, 
-            monto_contrato REAL, 
-            monto_deposito REAL
-        );
-        CREATE TABLE IF NOT EXISTS deudas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, 
-            id_contrato INTEGER, 
-            concepto TEXT, 
-            mes_anio TEXT, 
-            monto_debe REAL, 
-            monto_pago REAL DEFAULT 0, 
-            pagado INTEGER DEFAULT 0, 
-            fecha_cobro DATE
-        );
-    ''')
+    # 1. Crear tablas base si no existen
+    c.execute('''CREATE TABLE IF NOT EXISTS bloques (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS inmuebles (id INTEGER PRIMARY KEY AUTOINCREMENT, id_bloque INTEGER, tipo TEXT, precio_alquiler REAL, costo_contrato REAL, deposito_base REAL, estado TEXT DEFAULT 'Libre')''')
+    c.execute('''CREATE TABLE IF NOT EXISTS inquilinos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT, celular TEXT, procedencia TEXT, grupo TEXT, em_nombre TEXT, em_tel TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS contratos (id INTEGER PRIMARY KEY AUTOINCREMENT, id_inmueble INTEGER, id_inquilino INTEGER, fecha_inicio DATE, meses INTEGER)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS deudas (id INTEGER PRIMARY KEY AUTOINCREMENT, id_contrato INTEGER, concepto TEXT, mes_anio TEXT, monto_debe REAL, monto_pago REAL DEFAULT 0, pagado INTEGER DEFAULT 0, fecha_cobro DATE)''')
+
+    # 2. MIGRACIÓN AUTOMÁTICA (Resuelve el DatabaseError)
+    # Agregamos las columnas que faltan en la tabla contratos si ya existía
+    columnas_contratos = [
+        ("fecha_fin", "DATE"),
+        ("activo", "INTEGER DEFAULT 1"),
+        ("monto_alquiler", "REAL"),
+        ("monto_contrato", "REAL"),
+        ("monto_deposito", "REAL")
+    ]
+    for col, tipo in columnas_contratos:
+        try:
+            c.execute(f"ALTER TABLE contratos ADD COLUMN {col} {tipo}")
+        except sqlite3.OperationalError:
+            pass # La columna ya existe
+
     conn.commit()
     conn.close()
 
 init_db()
 
-# --- MENÚ LATERAL VISUAL (ICONOS FIJOS) ---
+# --- MENÚ LATERAL VISUAL ---
 with st.sidebar:
     st.title("🏢 Inmobiliaria Pro")
     st.divider()
@@ -87,11 +62,13 @@ with st.sidebar:
         label_visibility="collapsed"
     )
     
-    # Widget de resumen rápido en el menú
     st.divider()
     conn_s = conectar()
-    total_inm = pd.read_sql_query("SELECT COUNT(*) as total FROM inmuebles", conn_s).iloc[0]['total']
-    st.write(f"**Total Unidades:** {total_inm}")
+    try:
+        total_inm = pd.read_sql_query("SELECT COUNT(*) as total FROM inmuebles", conn_s).iloc[0]['total']
+        st.write(f"**Total Unidades:** {total_inm}")
+    except:
+        pass
     conn_s.close()
 
 # ---------------------------------------------------------
@@ -121,8 +98,9 @@ if menu == "🏠 Inventario":
         if pd.isna(row['fecha_inicio']) or row['activo'] == 0:
             return "Libre", "INMEDIATA"
         try:
-            f_ini = datetime.strptime(str(row['fecha_inicio']), '%Y-%m-%d').date()
-            f_fin = datetime.strptime(str(row['fecha_fin']), '%Y-%m-%d').date()
+            # Manejo flexible de formatos de fecha para evitar errores de casteo
+            f_ini = pd.to_datetime(row['fecha_inicio']).date()
+            f_fin = pd.to_datetime(row['fecha_fin']).date()
             if hoy < f_ini: return "RESERVADO", f_ini.strftime('%d/%m/%Y')
             elif hoy <= f_fin: return "OCUPADO", f_fin.strftime('%d/%m/%Y')
             else: return "VENCIDO", "INMEDIATA"
@@ -161,47 +139,20 @@ elif menu == "📝 Nuevo Contrato":
         f_ini = c1.date_input("Fecha Inicio", date.today())
         meses = c2.number_input("Duración (Meses)", min_value=1, value=6)
         
-        # Fecha fin calculada
+        # Cálculo de fecha fin aproximado (30 días por mes)
         f_fin = f_ini + timedelta(days=meses * 30)
-        st.info(f"📅 Fin de Contrato: {f_fin.strftime('%d/%m/%Y')}")
+        st.info(f"📅 Fin de Contrato estimado: {f_fin.strftime('%d/%m/%Y')}")
 
-        m_alq = c1.number_input("Monto Alquiler ($)", value=0.0)
-        if st.form_submit_button("GRABAR"):
+        m_alq = c1.number_input("Monto Alquiler Mensual ($)", value=0.0)
+        if st.form_submit_button("GRABAR CONTRATO"):
             cur = conn.cursor()
-            cur.execute("INSERT INTO contratos (id_inmueble, id_inquilino, fecha_inicio, fecha_fin, meses, monto_alquiler) VALUES (?,?,?,?,?,?)",
-                        (inm_id, inq_id, f_ini, f_fin, meses, m_alq))
+            cur.execute("""
+                INSERT INTO contratos (id_inmueble, id_inquilino, fecha_inicio, fecha_fin, meses, activo, monto_alquiler) 
+                VALUES (?,?,?,?,?,1,?)
+            """, (inm_id, inq_id, f_ini, f_fin, meses, m_alq))
             conn.commit()
             st.success("Contrato guardado correctamente.")
             st.rerun()
-
-# ---------------------------------------------------------
-# 3. COBRANZAS
-# ---------------------------------------------------------
-elif menu == "💰 Cobranzas":
-    st.subheader("Gestión de Cobros")
-    conn = conectar()
-    query_c = """
-        SELECT d.id, i.tipo, inq.nombre, d.concepto, d.monto_debe, d.monto_pago
-        FROM deudas d
-        JOIN contratos c ON d.id_contrato = c.id
-        JOIN inmuebles i ON c.id_inmueble = i.id
-        JOIN inquilinos inq ON c.id_inquilino = inq.id
-        WHERE d.pagado = 0
-    """
-    df_c = pd.read_sql_query(query_c, conn)
-    
-    for _, row in df_c.iterrows():
-        with st.expander(f"{row['tipo']} - {row['nombre']} ({row['concepto']})"):
-            saldo = row['monto_debe'] - row['monto_pago']
-            st.write(f"Deuda: **{fmt_moneda(saldo)}**")
-            p_monto = st.number_input(f"Monto a pagar", min_value=0.0, max_value=float(saldo), key=f"p_{row['id']}")
-            if st.button(f"Confirmar Pago {row['id']}"):
-                cur = conn.cursor()
-                nuevo_p = row['monto_pago'] + p_monto
-                estado_p = 1 if nuevo_p >= row['monto_debe'] else 0
-                cur.execute("UPDATE deudas SET monto_pago=?, pagado=?, fecha_cobro=? WHERE id=?", 
-                            (nuevo_p, estado_p, date.today(), row['id']))
-                conn.commit(); st.rerun()
 
 # ---------------------------------------------------------
 # 4. MOROSOS
