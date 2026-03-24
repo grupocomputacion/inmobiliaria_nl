@@ -62,3 +62,111 @@ def init_db():
 
 # Ejecutamos la inicialización al cargar el script
 init_db()
+
+# --- 4. MENÚ LATERAL VISUAL (ICONOS FIJOS) ---
+with st.sidebar:
+    st.title("🏢 Inmobiliaria Pro")
+    st.divider()
+    # Menú estático con iconos
+    menu = st.radio(
+        "Navegación:",
+        ["🏠 Inventario", "📝 Nuevo Contrato", "💰 Cobranzas", "🚨 Morosos", "📊 Caja"],
+        label_visibility="collapsed"
+    )
+    
+    st.divider()
+    # Widget de estado rápido en el lateral
+    conn_s = conectar()
+    try:
+        total_inm = conn_s.execute("SELECT COUNT(*) FROM inmuebles").fetchone()[0]
+        st.write(f"**Total Unidades:** {total_inm}")
+    except:
+        pass
+    conn_s.close()
+
+# ---------------------------------------------------------
+# 1. MÓDULO: INVENTARIO PREDICTIVO (LÓGICA DE FECHAS)
+# ---------------------------------------------------------
+if menu == "🏠 Inventario":
+    st.subheader("Estado de Unidades y Disponibilidad")
+    conn = conectar()
+    hoy = date.today()
+
+    # Filtros superiores
+    f1, f2, f3 = st.columns([2, 2, 2])
+    filtro_sit = f1.selectbox("Situación Actual", ["TODOS", "Libres Ahora", "Ocupados Ahora"])
+    
+    bloques_db = pd.read_sql_query("SELECT nombre FROM bloques", conn)
+    filtro_blq = f2.selectbox("Filtrar Bloque", ["TODOS"] + bloques_db['nombre'].tolist())
+    busqueda = f3.text_input("Buscar Unidad (Tipo o ID)...")
+
+    # Query Maestra: Cruce de inmuebles con sus contratos activos
+    query_inv = """
+        SELECT 
+            i.id, 
+            b.nombre as Bloque, 
+            i.tipo as Unidad, 
+            i.precio_alquiler,
+            c.fecha_inicio, 
+            c.fecha_fin, 
+            c.activo
+        FROM inmuebles i
+        JOIN bloques b ON i.id_bloque = b.id
+        LEFT JOIN contratos c ON i.id = c.id_inmueble AND c.activo = 1
+    """
+    df = pd.read_sql_query(query_inv, conn)
+
+    # LÓGICA PREDICTIVA: Determinamos el estado real por fecha
+    def calcular_estado_real(row):
+        # Si no hay contrato o está inactivo -> Libre
+        if pd.isna(row['fecha_inicio']) or row['activo'] == 0:
+            return "Libre", "INMEDIATA"
+        
+        try:
+            # Convertimos strings de DB a objetos date de Python para comparar
+            f_ini = pd.to_datetime(row['fecha_inicio']).date()
+            f_fin = pd.to_datetime(row['fecha_fin']).date()
+            
+            if hoy < f_ini:
+                return "RESERVADO", f_ini.strftime('%d/%m/%Y')
+            elif hoy <= f_fin:
+                return "OCUPADO", f_fin.strftime('%d/%m/%Y')
+            else:
+                # El contrato terminó pero sigue figurando activo en DB
+                return "CONTRATO VENCIDO", "INMEDIATA"
+        except:
+            return "Libre", "INMEDIATA"
+
+    # Aplicamos la lógica y creamos las columnas calculadas
+    df[['Estado', 'Disponible Desde']] = df.apply(lambda x: pd.Series(calcular_estado_real(x)), axis=1)
+    
+    # Aplicación de los filtros del usuario
+    if filtro_sit == "Libres Ahora":
+        df = df[df['Estado'].str.contains("Libre|VENCIDO")]
+    elif filtro_sit == "Ocupados Ahora":
+        df = df[df['Estado'] == "OCUPADO"]
+        
+    if filtro_blq != "TODOS":
+        df = df[df['Bloque'] == filtro_blq]
+        
+    if busqueda:
+        df = df[df['Unidad'].str.contains(busqueda, case=False)]
+
+    # Formateo de precios (usando nuestra función de la Parte 1)
+    df['Alquiler'] = df['precio_alquiler'].apply(fmt_moneda)
+
+    # Configuración de colores para la tabla
+    def color_sit(val):
+        if "Libre" in val: color = '#2ecc71' # Verde
+        elif val == "OCUPADO": color = '#e74c3c' # Rojo
+        elif val == "RESERVADO": color = '#3498db' # Azul
+        else: color = '#f39c12' # Naranja (Vencidos)
+        return f'color: {color}; font-weight: bold'
+
+    # Mostrar tabla final
+    cols_finales = ["Bloque", "Unidad", "Estado", "Disponible Desde", "Alquiler"]
+    st.dataframe(
+        df[cols_finales].style.applymap(color_sit, subset=['Estado']),
+        use_container_width=True, 
+        hide_index=True
+    )
