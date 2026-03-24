@@ -105,7 +105,7 @@ elif menu == "📝 Nuevo Contrato":
         id_inm = c1.selectbox("Unidad", inm_db['id'].tolist(), format_func=lambda x: f"{x}-{inm_db[inm_db['id']==x]['tipo'].values[0]}")
         id_inq = c2.selectbox("Inquilino", inq_db['id'].tolist(), format_func=lambda x: inq_db[inq_db['id']==x]['nombre'].values[0])
         f_ini = c1.date_input("Inicio", date.today())
-        meses = c2.number_input("Meses", min_value=1, value=6)
+        meses = c2.number_input("Meses", min_value=1, value=3)
         f_fin = f_ini + timedelta(days=meses * 30)
         st.info(f"Vencimiento automático: {f_fin.strftime('%d/%m/%Y')}")
         monto = st.number_input("Monto Alquiler Mensual", value=0.0)
