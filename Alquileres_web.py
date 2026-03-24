@@ -13,7 +13,6 @@ def conectar():
     return sqlite3.connect('datos_alquileres.db', check_same_thread=False)
 
 def fmt_moneda(valor):
-    """Formatea importes: $ 1.250.000 (Sin decimales, punto de miles)"""
     try:
         return f"$ {int(float(valor or 0)):,}".replace(",", ".")
     except:
@@ -24,40 +23,52 @@ def crear_link_whatsapp(tel, mensaje):
     texto = urllib.parse.quote(mensaje)
     return f"https://wa.me/{tel_limpio}?text={texto}"
 
-def inicializar_absoluto():
-    """Borrado físico y recreación de tablas para limpieza total"""
+def init_db():
+    """Inicialización con reparación automática de columnas"""
     conn = conectar()
     c = conn.cursor()
-    tablas = ["deudas", "contratos", "inquilinos", "inmuebles", "bloques"]
-    for t in tablas:
-        c.execute(f"DROP TABLE IF EXISTS {t}")
-    c.executescript('''
-        CREATE TABLE bloques (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE);
-        CREATE TABLE inmuebles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, id_bloque INTEGER, tipo TEXT, 
-            precio_alquiler REAL, costo_contrato REAL, deposito_base REAL, estado TEXT DEFAULT 'Libre'
-        );
-        CREATE TABLE inquilinos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT, celular TEXT, procedencia TEXT);
-        CREATE TABLE contratos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, id_inmueble INTEGER, id_inquilino INTEGER, 
-            fecha_inicio DATE, fecha_fin DATE, meses INTEGER, activo INTEGER DEFAULT 1, 
-            monto_alquiler REAL, monto_contrato REAL, monto_deposito REAL
-        );
-        CREATE TABLE deudas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, id_contrato INTEGER, concepto TEXT, 
-            mes_anio TEXT, monto_debe REAL, monto_pago REAL DEFAULT 0, pagado INTEGER DEFAULT 0, fecha_cobro DATE
-        );
-    ''')
+    # Tablas Base
+    c.execute("CREATE TABLE IF NOT EXISTS bloques (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE)")
+    c.execute("CREATE TABLE IF NOT EXISTS inmuebles (id INTEGER PRIMARY KEY AUTOINCREMENT, id_bloque INTEGER, tipo TEXT, precio_alquiler REAL, costo_contrato REAL, deposito_base REAL, estado TEXT DEFAULT 'Libre')")
+    c.execute("CREATE TABLE IF NOT EXISTS inquilinos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT, celular TEXT, procedencia TEXT)")
+    c.execute("CREATE TABLE IF NOT EXISTS contratos (id INTEGER PRIMARY KEY AUTOINCREMENT, id_inmueble INTEGER, id_inquilino INTEGER, fecha_inicio DATE, meses INTEGER)")
+    c.execute("CREATE TABLE IF NOT EXISTS deudas (id INTEGER PRIMARY KEY AUTOINCREMENT, id_contrato INTEGER, concepto TEXT, mes_anio TEXT, monto_debe REAL, monto_pago REAL DEFAULT 0, pagado INTEGER DEFAULT 0, fecha_cobro DATE)")
+    
+    # REPARACIÓN: Agregamos columnas faltantes una por una
+    columnas_nuevas = [
+        ("fecha_fin", "DATE"), 
+        ("activo", "INTEGER DEFAULT 1"), 
+        ("monto_alquiler", "REAL DEFAULT 0"),
+        ("monto_contrato", "REAL DEFAULT 0"),
+        ("monto_deposito", "REAL DEFAULT 0")
+    ]
+    for col, tipo in columnas_nuevas:
+        try:
+            c.execute(f"ALTER TABLE contratos ADD COLUMN {col} {tipo}")
+        except sqlite3.OperationalError:
+            pass # Ya existe
+            
     conn.commit()
     conn.close()
 
-# --- 3. MENÚ LATERAL VISUAL ---
+def inicializar_absoluto():
+    conn = conectar()
+    c = conn.cursor()
+    for t in ["deudas", "contratos", "inquilinos", "inmuebles", "bloques"]:
+        c.execute(f"DROP TABLE IF EXISTS {t}")
+    conn.commit()
+    conn.close()
+    init_db()
+
+# Ejecutar siempre al inicio
+init_db()
+
+# --- 3. MENÚ LATERAL ---
 with st.sidebar:
     st.title("🏢 Inmobiliaria Pro")
     if st.button("🚨 REINICIAR TODA LA BASE"):
         inicializar_absoluto()
         st.cache_data.clear()
-        st.success("Base de datos reseteada al 100%.")
         st.rerun()
     
     st.divider()
@@ -68,14 +79,13 @@ with st.sidebar:
     )
 
 # ---------------------------------------------------------
-# 1. INVENTARIO (SIN DUPLICADOS + COLUMNAS SOLICITADAS)
+# 1. INVENTARIO (PROTEGIDO CONTRA ERRORES DE COLUMNA)
 # ---------------------------------------------------------
 if menu == "🏠 1. Inventario":
     st.subheader("Estado de Unidades y Disponibilidad")
     conn = conectar()
     hoy = date.today()
     
-    # Query con GROUP BY para evitar registros duplicados
     query = """
         SELECT 
             i.id, b.nombre as Bloque, i.tipo as Unidad, 
@@ -101,28 +111,26 @@ if menu == "🏠 1. Inventario":
 
         if not df.empty:
             df[['Situación', 'Disponible Desde']] = df.apply(lambda x: pd.Series(calcular_sit(x)), axis=1)
-            
-            # Formateo de las 3 columnas de dinero
             df['Alquiler'] = df['precio_alquiler'].apply(fmt_moneda)
             df['Contrato'] = df['costo_contrato'].apply(fmt_moneda)
             df['Depósito'] = df['deposito_base'].apply(fmt_moneda)
             
-            # Semáforo de colores solicitado
             def color_sit(val):
-                if val == "Libre": color = '#28a745' # Verde
-                elif val == "OCUPADO": color = '#dc3545' # Rojo
-                else: color = '#fd7e14' 
+                if val == "Libre": color = '#28a745'
+                elif val == "OCUPADO": color = '#dc3545'
+                else: color = '#fd7e14'
                 return f'color: {color}; font-weight: bold'
 
             cols = ["Bloque", "Unidad", "Situación", "Disponible Desde", "Alquiler", "Contrato", "Depósito"]
             st.dataframe(df[cols].style.applymap(color_sit, subset=['Situación']), use_container_width=True, hide_index=True)
         else:
-            st.info("Base vacía. Cargue datos en Configuración.")
+            st.info("Sin unidades. Cargue datos en Configuración.")
     except Exception as e:
-        st.error(f"Error de base de datos: {e}")
+        st.error(f"Error detectado: {e}")
+        st.info("Intente pulsar el botón de REINICIAR en la barra lateral.")
 
 # ---------------------------------------------------------
-# 2. NUEVO CONTRATO (VALORES AUTOMÁTICOS)
+# 2. NUEVO CONTRATO (SUGERENCIA AUTOMÁTICA)
 # ---------------------------------------------------------
 elif menu == "📝 2. Nuevo Contrato":
     st.subheader("Alta de Alquiler")
@@ -139,11 +147,9 @@ elif menu == "📝 2. Nuevo Contrato":
             f_ini = c1.date_input("Fecha Inicio", date.today())
             meses = c2.number_input("Meses", min_value=1, value=6)
             f_fin = f_ini + timedelta(days=meses * 30)
-            st.info(f"Vencimiento automático: {f_fin.strftime('%d/%m/%Y')}")
             
-            # Sugerencia automática de valores desde el inventario
             val_ref = inm_db[inm_db['id'] == id_inm].iloc[0]
-            m_alq = c1.number_input("Monto Alquiler Mensual", value=float(val_ref['precio_alquiler']))
+            m_alq = c1.number_input("Monto Alquiler", value=float(val_ref['precio_alquiler']))
             m_con = c2.number_input("Costo Contrato", value=float(val_ref['costo_contrato']))
             m_dep = c1.number_input("Depósito", value=float(val_ref['deposito_base']))
 
