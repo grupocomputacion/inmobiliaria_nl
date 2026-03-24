@@ -5,300 +5,170 @@ from datetime import datetime, date, timedelta
 import io
 import urllib.parse
 
-# --- 1. CONFIGURACIÓN DE NAVEGACIÓN Y ESTILO ---
-st.set_page_config(
-    page_title="Inmobiliaria Pro Cloud", 
-    layout="wide", 
-    initial_sidebar_state="expanded"
-)
+# --- 1. CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="Inmobiliaria Pro Cloud", layout="wide", initial_sidebar_state="expanded")
 
-# --- 2. FUNCIONES DE APOYO (EL MOTOR DEL SISTEMA) ---
+# --- 2. FUNCIONES DE MOTOR ---
 def conectar():
-    """Conexión segura a SQLite compatible con hilos de Streamlit"""
     return sqlite3.connect('datos_alquileres.db', check_same_thread=False)
 
 def fmt_moneda(valor):
-    """Formatea importes: $ 1.250.000 (sin decimales, con punto de miles)"""
+    """Formatea importes: $ 1.250.000"""
     try:
-        # Forzamos float y luego int para limpiar cualquier residuo de la DB
         return f"$ {int(float(valor)):,}".replace(",", ".")
     except:
         return "$ 0"
 
 def crear_link_whatsapp(tel, mensaje):
-    """Codifica el mensaje para que funcione como link directo a la App"""
     texto = urllib.parse.quote(mensaje)
     return f"https://api.whatsapp.com/send?phone={tel}&text={texto}"
 
-# --- 3. INICIALIZACIÓN Y AUTO-MIGRACIÓN DE DB ---
 def init_db():
     conn = conectar()
     c = conn.cursor()
-    
-    # Creamos las tablas base si no existen (Basado en tu original)
+    # Estructura base
     c.execute('''CREATE TABLE IF NOT EXISTS bloques (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE)''')
     c.execute('''CREATE TABLE IF NOT EXISTS inmuebles (id INTEGER PRIMARY KEY AUTOINCREMENT, id_bloque INTEGER, tipo TEXT, precio_alquiler REAL, costo_contrato REAL, deposito_base REAL, estado TEXT DEFAULT 'Libre')''')
     c.execute('''CREATE TABLE IF NOT EXISTS inquilinos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT, celular TEXT, procedencia TEXT, grupo TEXT, em_nombre TEXT, em_tel TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS contratos (id INTEGER PRIMARY KEY AUTOINCREMENT, id_inmueble INTEGER, id_inquilino INTEGER, fecha_inicio DATE, meses INTEGER)''')
     c.execute('''CREATE TABLE IF NOT EXISTS deudas (id INTEGER PRIMARY KEY AUTOINCREMENT, id_contrato INTEGER, concepto TEXT, mes_anio TEXT, monto_debe REAL, monto_pago REAL DEFAULT 0, pagado INTEGER DEFAULT 0, fecha_cobro DATE)''')
 
-    # MIGRACIÓN: Agregamos columnas predictivas y financieras si no existen
-    # Esto evita el DatabaseError al ejecutar el sistema por primera vez
-    columnas_contratos = [
-        ("fecha_fin", "DATE"), 
-        ("activo", "INTEGER DEFAULT 1"),
-        ("monto_alquiler", "REAL DEFAULT 0"), 
-        ("monto_contrato", "REAL DEFAULT 0"),
-        ("monto_deposito", "REAL DEFAULT 0")
-    ]
-    for col, tipo in columnas_contratos:
-        try:
-            c.execute(f"ALTER TABLE contratos ADD COLUMN {col} {tipo}")
-        except sqlite3.OperationalError:
-            pass # La columna ya existe, no hacemos nada
-            
+    # Migración de columnas para predictibilidad
+    columnas = [("fecha_fin", "DATE"), ("activo", "INTEGER DEFAULT 1"), ("monto_alquiler", "REAL DEFAULT 0")]
+    for col, tipo in columnas:
+        try: c.execute(f"ALTER TABLE contratos ADD COLUMN {col} {tipo}")
+        except: pass
     conn.commit()
     conn.close()
 
-# Ejecutamos la inicialización al cargar el script
 init_db()
 
-# --- 4. MENÚ LATERAL VISUAL (ICONOS FIJOS) ---
+# --- 3. MENÚ LATERAL VISUAL ---
 with st.sidebar:
     st.title("🏢 Inmobiliaria Pro")
     st.divider()
-    # Menú estático con iconos
-    menu = st.radio(
-        "Navegación:",
-        ["🏠 Inventario", "📝 Nuevo Contrato", "💰 Cobranzas", "🚨 Morosos", "📊 Caja"],
-        label_visibility="collapsed"
-    )
-    
-    st.divider()
-    # Widget de estado rápido en el lateral
-    conn_s = conectar()
-    try:
-        total_inm = conn_s.execute("SELECT COUNT(*) FROM inmuebles").fetchone()[0]
-        st.write(f"**Total Unidades:** {total_inm}")
-    except:
-        pass
-    conn_s.close()
+    menu = st.radio("Navegación:", 
+                    ["🏠 Inventario", "📝 Nuevo Contrato", "💰 Cobranzas", "🚨 Morosos", "📊 Caja", "⚙️ Configuración"], 
+                    label_visibility="collapsed")
 
 # ---------------------------------------------------------
-# 1. MÓDULO: INVENTARIO PREDICTIVO (LÓGICA DE FECHAS)
+# MÓDULO: INVENTARIO PREDICTIVO
 # ---------------------------------------------------------
 if menu == "🏠 Inventario":
-    st.subheader("Estado de Unidades y Disponibilidad")
+    st.subheader("Disponibilidad de Unidades")
     conn = conectar()
     hoy = date.today()
-
-    # Filtros superiores
-    f1, f2, f3 = st.columns([2, 2, 2])
-    filtro_sit = f1.selectbox("Situación Actual", ["TODOS", "Libres Ahora", "Ocupados Ahora"])
     
-    bloques_db = pd.read_sql_query("SELECT nombre FROM bloques", conn)
-    filtro_blq = f2.selectbox("Filtrar Bloque", ["TODOS"] + bloques_db['nombre'].tolist())
-    busqueda = f3.text_input("Buscar Unidad (Tipo o ID)...")
-
-    # Query Maestra: Cruce de inmuebles con sus contratos activos
-    query_inv = """
-        SELECT 
-            i.id, 
-            b.nombre as Bloque, 
-            i.tipo as Unidad, 
-            i.precio_alquiler,
-            c.fecha_inicio, 
-            c.fecha_fin, 
-            c.activo
+    query = """
+        SELECT i.id, b.nombre as Bloque, i.tipo as Unidad, i.precio_alquiler,
+               c.fecha_inicio, c.fecha_fin, c.activo
         FROM inmuebles i
         JOIN bloques b ON i.id_bloque = b.id
         LEFT JOIN contratos c ON i.id = c.id_inmueble AND c.activo = 1
     """
-    df = pd.read_sql_query(query_inv, conn)
+    df = pd.read_sql_query(query, conn)
 
-    # LÓGICA PREDICTIVA: Determinamos el estado real por fecha
-    def calcular_estado_real(row):
-        # Si no hay contrato o está inactivo -> Libre
-        if pd.isna(row['fecha_inicio']) or row['activo'] == 0:
-            return "Libre", "INMEDIATA"
-        
+    def calcular_estado(row):
+        if pd.isna(row['fecha_inicio']) or row['activo'] == 0: return "Libre", "INMEDIATA"
         try:
-            # Convertimos strings de DB a objetos date de Python para comparar
             f_ini = pd.to_datetime(row['fecha_inicio']).date()
             f_fin = pd.to_datetime(row['fecha_fin']).date()
-            
-            if hoy < f_ini:
-                return "RESERVADO", f_ini.strftime('%d/%m/%Y')
-            elif hoy <= f_fin:
-                return "OCUPADO", f_fin.strftime('%d/%m/%Y')
-            else:
-                # El contrato terminó pero sigue figurando activo en DB
-                return "CONTRATO VENCIDO", "INMEDIATA"
-        except:
-            return "Libre", "INMEDIATA"
+            if hoy < f_ini: return "RESERVADO", f_ini.strftime('%d/%m/%Y')
+            elif hoy <= f_fin: return "OCUPADO", f_fin.strftime('%d/%m/%Y')
+            else: return "VENCIDO", "INMEDIATA"
+        except: return "Libre", "INMEDIATA"
 
-    # Aplicamos la lógica y creamos las columnas calculadas
-    df[['Estado', 'Disponible Desde']] = df.apply(lambda x: pd.Series(calcular_estado_real(x)), axis=1)
-    
-    # Aplicación de los filtros del usuario
-    if filtro_sit == "Libres Ahora":
-        df = df[df['Estado'].str.contains("Libre|VENCIDO")]
-    elif filtro_sit == "Ocupados Ahora":
-        df = df[df['Estado'] == "OCUPADO"]
-        
-    if filtro_blq != "TODOS":
-        df = df[df['Bloque'] == filtro_blq]
-        
-    if busqueda:
-        df = df[df['Unidad'].str.contains(busqueda, case=False)]
-
-    # Formateo de precios (usando nuestra función de la Parte 1)
+    df[['Estado', 'Disponible']] = df.apply(lambda x: pd.Series(calcular_estado(x)), axis=1)
     df['Alquiler'] = df['precio_alquiler'].apply(fmt_moneda)
-
-    # Configuración de colores para la tabla
-    def color_sit(val):
-        if "Libre" in val: color = '#2ecc71' # Verde
-        elif val == "OCUPADO": color = '#e74c3c' # Rojo
-        elif val == "RESERVADO": color = '#3498db' # Azul
-        else: color = '#f39c12' # Naranja (Vencidos)
-        return f'color: {color}; font-weight: bold'
-
-    # Mostrar tabla final
-    cols_finales = ["Bloque", "Unidad", "Estado", "Disponible Desde", "Alquiler"]
-    st.dataframe(
-        df[cols_finales].style.applymap(color_sit, subset=['Estado']),
-        use_container_width=True, 
-        hide_index=True
-    )
+    
+    st.dataframe(df[["Bloque", "Unidad", "Estado", "Disponible", "Alquiler"]], use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------
-# 2. MÓDULO: NUEVO CONTRATO (CON CÁLCULO DE VENCIMIENTO)
+# MÓDULO: CONFIGURACIÓN (ALTA DE INQUILINOS / BLOQUES)
+# ---------------------------------------------------------
+elif menu == "⚙️ Configuración":
+    st.subheader("Carga de Datos Maestros")
+    t1, t2, t3 = st.tabs(["👤 Inquilinos", "🏢 Bloques", "🏠 Unidades"])
+    
+    with t1:
+        with st.form("f_inq"):
+            c1, c2 = st.columns(2)
+            nom = c1.text_input("Nombre Completo")
+            tel = c2.text_input("Celular (549...)")
+            proc = c1.text_input("Procedencia")
+            grup = c2.selectbox("Grupo", ["Solo/a", "Familia", "Pareja"])
+            if st.form_submit_button("Guardar Inquilino"):
+                conn = conectar()
+                conn.execute("INSERT INTO inquilinos (nombre, celular, procedencia, grupo) VALUES (?,?,?,?)", (nom, tel, proc, grup))
+                conn.commit(); st.success("Inquilino creado")
+
+    with t2:
+        with st.form("f_blq"):
+            nom_b = st.text_input("Nombre del Bloque")
+            if st.form_submit_button("Guardar Bloque"):
+                conn = conectar(); conn.execute("INSERT INTO bloques (nombre) VALUES (?)", (nom_b,))
+                conn.commit(); st.success("Bloque creado")
+
+    with t3:
+        with st.form("f_inm"):
+            conn = conectar()
+            blqs = pd.read_sql_query("SELECT * FROM bloques", conn)
+            id_b = st.selectbox("Bloque", blqs['id'].tolist(), format_func=lambda x: blqs[blqs['id']==x]['nombre'].values[0])
+            tip = st.text_input("Tipo/Nombre Unidad")
+            pre = st.number_input("Precio Alquiler Base", value=0.0)
+            if st.form_submit_button("Guardar Unidad"):
+                conn.execute("INSERT INTO inmuebles (id_bloque, tipo, precio_alquiler) VALUES (?,?,?)", (id_b, tip, pre))
+                conn.commit(); st.success("Unidad creada")
+
+# ---------------------------------------------------------
+# MÓDULO: NUEVO CONTRATO
 # ---------------------------------------------------------
 elif menu == "📝 Nuevo Contrato":
-    st.subheader("Carga de Nuevo Contrato")
+    st.subheader("Alta de Contrato")
     conn = conectar()
-    
-    # Filtramos solo inmuebles que están "Libres" o "Vencidos" según nuestra lógica previa
-    # Para simplificar al usuario, traemos todos y el sistema valida.
-    inm_db = pd.read_sql_query("SELECT id, tipo, precio_alquiler FROM inmuebles", conn)
+    inm_db = pd.read_sql_query("SELECT id, tipo FROM inmuebles", conn)
     inq_db = pd.read_sql_query("SELECT id, nombre FROM inquilinos", conn)
-
-    if not inq_db.empty and not inm_db.empty:
-        with st.form("form_nuevo_contrato"):
-            c1, c2 = st.columns(2)
-            
-            id_inm = c1.selectbox(
-                "Seleccionar Unidad", 
-                inm_db['id'].tolist(), 
-                format_func=lambda x: f"Unidad {x} - {inm_db[inm_db['id']==x]['tipo'].values[0]}"
-            )
-            
-            id_inq = c2.selectbox(
-                "Seleccionar Inquilino", 
-                inq_db['id'].tolist(), 
-                format_func=lambda x: inq_db[inq_db['id']==x]['nombre'].values[0]
-            )
-            
-            f_inicio = c1.date_input("Fecha de Inicio", date.today())
-            meses_duracion = c2.number_input("Meses de Contrato", min_value=1, value=12)
-            
-            # CÁLCULO AUTOMÁTICO DE FECHA FIN
-            # Usamos aproximación de 30 días para el vencimiento
-            f_finalizacion = f_inicio + timedelta(days=meses_duracion * 30)
-            
-            st.info(f"📅 **Vencimiento del Contrato:** {f_finalizacion.strftime('%d/%m/%Y')}")
-            
-            monto_alq = c1.number_input("Monto Alquiler Mensual ($)", value=0.0)
-            
-            if st.form_submit_button("✅ GUARDAR CONTRATO"):
-                cursor = conn.cursor()
-                # Insertamos con la nueva estructura que creamos en la Parte 1
-                cursor.execute("""
-                    INSERT INTO contratos (
-                        id_inmueble, id_inquilino, fecha_inicio, fecha_fin, 
-                        meses, activo, monto_alquiler
-                    ) VALUES (?, ?, ?, ?, ?, 1, ?)
-                """, (id_inm, id_inq, f_inicio, f_finalizacion, meses_duracion, monto_alq))
-                
-                # Sincronizamos el estado estático por compatibilidad
-                cursor.execute("UPDATE inmuebles SET estado = 'Ocupado' WHERE id = ?", (id_inm,))
-                
-                conn.commit()
-                st.success(f"Contrato registrado. La unidad figurará como ocupada hasta el {f_finalizacion.strftime('%d/%m/%Y')}")
-                st.rerun()
-    else:
-        st.error("Asegúrese de tener Inmuebles e Inquilinos cargados en la base de datos.")
+    
+    with st.form("f_con"):
+        c1, c2 = st.columns(2)
+        id_inm = c1.selectbox("Unidad", inm_db['id'].tolist(), format_func=lambda x: f"{x}-{inm_db[inm_db['id']==x]['tipo'].values[0]}")
+        id_inq = c2.selectbox("Inquilino", inq_db['id'].tolist(), format_func=lambda x: inq_db[inq_db['id']==x]['nombre'].values[0])
+        f_ini = c1.date_input("Inicio", date.today())
+        meses = c2.number_input("Meses", min_value=1, value=6)
+        f_fin = f_ini + timedelta(days=meses * 30)
+        st.info(f"Vence: {f_fin.strftime('%d/%m/%Y')}")
+        monto = st.number_input("Alquiler Mensual", value=0.0)
+        if st.form_submit_button("Grabar Contrato"):
+            cur = conn.cursor()
+            cur.execute("INSERT INTO contratos (id_inmueble, id_inquilino, fecha_inicio, fecha_fin, meses, activo, monto_alquiler) VALUES (?,?,?,?,?,1,?)",
+                        (id_inm, id_inq, f_ini, f_fin, meses, monto))
+            conn.commit(); st.success("Contrato grabado"); st.rerun()
 
 # ---------------------------------------------------------
-# 3. MÓDULO: COBRANZAS (CON RECIBO WHATSAPP)
+# MÓDULO: COBRANZAS (CON WHATSAPP)
 # ---------------------------------------------------------
 elif menu == "💰 Cobranzas":
-    st.subheader("Gestión de Cobros y Recibos")
+    st.subheader("Cobros")
     conn = conectar()
-    
-    # Query que une deudas con datos de contacto para el WhatsApp
-    query_cobros = """
-        SELECT 
-            d.id, i.tipo as Unidad, inq.nombre as Inquilino, inq.celular,
-            d.concepto, d.monto_debe, d.monto_pago
-        FROM deudas d
-        JOIN contratos c ON d.id_contrato = c.id
-        JOIN inmuebles i ON c.id_inmueble = i.id
-        JOIN inquilinos inq ON c.id_inquilino = inq.id
+    query_c = """
+        SELECT d.id, i.tipo, inq.nombre, d.monto_debe, d.monto_pago, inq.celular, d.concepto
+        FROM deudas d JOIN contratos c ON d.id_contrato=c.id
+        JOIN inmuebles i ON c.id_inmueble=i.id JOIN inquilinos inq ON c.id_inquilino=inq.id
         WHERE d.pagado = 0
     """
-    
-    df_c = pd.read_sql_query(query_cobros, conn)
-    
-    if not df_c.empty:
-        for _, row in df_c.iterrows():
-            with st.expander(f"📍 {row['Unidad']} - {row['Inquilino']} ({row['concepto']})"):
-                # Cálculo de saldos usando floats seguros
-                pendiente = float(row['monto_debe']) - float(row['monto_pago'])
-                st.write(f"Saldo Pendiente: **{fmt_moneda(pendiente)}**")
-                
-                cobro_parcial = st.number_input(
-                    f"Monto a cobrar", 
-                    min_value=0.0, 
-                    max_value=pendiente, 
-                    key=f"input_{row['id']}",
-                    step=1000.0
-                )
-                
-                if st.button(f"Confirmar Cobro", key=f"btn_{row['id']}"):
-                    cursor = conn.cursor()
-                    nuevo_total_pago = float(row['monto_pago']) + cobro_parcial
-                    estado_final = 1 if nuevo_total_pago >= float(row['monto_debe']) else 0
-                    
-                    cursor.execute("""
-                        UPDATE deudas SET monto_pago=?, pagado=?, fecha_cobro=? WHERE id=?
-                    """, (nuevo_total_pago, estado_pago, date.today(), row['id']))
-                    conn.commit()
-                    
-                    # --- GENERACIÓN DE RECIBO PARA WHATSAPP ---
-                    texto_recibo = (
-                        f"✅ *RECIBO DE PAGO - INMOBILIARIA*\n\n"
-                        f"Unidad: *{row['Unidad']}*\n"
-                        f"Inquilino: *{row['Inquilino']}*\n"
-                        f"Concepto: {row['concepto']}\n"
-                        f"Monto Abonado: *{fmt_moneda(cobro_parcial)}*\n"
-                        f"Fecha: {date.today().strftime('%d/%m/%Y')}\n\n"
-                        f"Saldo Restante: *{fmt_moneda(pendiente - cobro_parcial)}*\n"
-                        f"¡Muchas gracias!"
-                    )
-                    
-                    # Guardamos el link en el estado de la sesión para mostrar el botón
-                    st.session_state[f'wa_link_{row["id"]}'] = crear_link_whatsapp(row['celular'], texto_recibo)
-                    st.success("Cobro impactado correctamente.")
-                
-                # Si el pago se realizó, mostramos el botón de WhatsApp con estilo iPad
-                if f'wa_link_{row["id"]}' in st.session_state:
-                    st.markdown(f"""
-                        <a href="{st.session_state[f'wa_link_{row["id"]}']}" target="_blank">
-                            <button style="background-color:#25D366; color:white; border:none; padding:12px 20px; border-radius:8px; cursor:pointer; width:100%; font-weight:bold;">
-                                📲 Enviar Recibo por WhatsApp
-                            </button>
-                        </a>
-                    """, unsafe_allow_html=True)
-    else:
-        st.info("No hay deudas pendientes de cobro.")
+    df_c = pd.read_sql_query(query_c, conn)
+    for _, row in df_c.iterrows():
+        with st.expander(f"{row['tipo']} - {row['nombre']}"):
+            saldo = row['monto_debe'] - row['monto_pago']
+            st.write(f"Debe: {fmt_moneda(saldo)}")
+            pago = st.number_input("Monto a cobrar", min_value=0.0, max_value=float(saldo), key=f"c_{row['id']}")
+            if st.button("Confirmar Pago", key=f"b_{row['id']}"):
+                nuevo = row['monto_pago'] + pago
+                pagado = 1 if nuevo >= row['monto_debe'] else 0
+                conn.execute("UPDATE deudas SET monto_pago=?, pagado=?, fecha_cobro=? WHERE id=?", (nuevo, pagado, date.today(), row['id']))
+                conn.commit()
+                msg = f"✅ RECIBO: {row['tipo']}\\nInquilino: {row['nombre']}\\nAbonado: {fmt_moneda(pago)}\\nSaldo: {fmt_moneda(saldo-pago)}"
+                st.session_state[f'wa_{row["id"]}'] = crear_link_whatsapp(row['celular'], msg)
+                st.rerun()
+            if f'wa_{row["id"]}' in st.session_state:
+                st.markdown(f'<a href="{st.session_state[f"wa_{row[id]}"]}" target="_blank"><button style="background-color:#25D366; color:white; border:none; padding:10px; border-radius:5px; width:100%">📲 WhatsApp</button></a>', unsafe_allow_html=True)
