@@ -12,13 +12,20 @@ st.set_page_config(
     page_title="NL Propiedades - Gestión", 
     page_icon="🏠", 
     layout="wide", 
-    initial_sidebar_state="expanded",
-st.image("alquileres.jpg", width=200)    
+    initial_sidebar_state="expanded"
 )
 
-# Estilo Dorado y Negro
+# El logo en el cuerpo principal (arriba a la izquierda)
+# Cambia "logo.jpg" por el nombre exacto de tu archivo si es diferente
+try:
+    st.image("alquileres.jpg", width=200)
+except:
+    st.title("NL PROPIEDADES")
+
+# Estilo Dorado y Negro (NL PROPIEDADES)
 st.markdown("""
     <style>
+    /* Color de los botones principales */
     .stButton>button {
         background-color: #D4AF37;
         color: black;
@@ -29,6 +36,10 @@ st.markdown("""
     .stButton>button:hover {
         background-color: #B8860B;
         color: white;
+    }
+    /* Color de los encabezados */
+    h1, h2, h3 {
+        color: #D4AF37;
     }
     </style>
     """, unsafe_allow_html=True)
