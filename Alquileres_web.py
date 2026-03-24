@@ -13,9 +13,10 @@ st.set_page_config(
     page_icon="🏠", 
     layout="wide", 
     initial_sidebar_state="expanded"
+st.image("alquileres.jpg", width=200)    
 )
 
-# Estilo personalizado para combinar con el logo (Dorado y Negro)
+# Estilo Dorado y Negro
 st.markdown("""
     <style>
     .stButton>button {
@@ -47,6 +48,7 @@ def limpiar_monto(texto):
 def inicializar_db():
     conn = conectar()
     c = conn.cursor()
+    # Creamos las tablas con la estructura final
     c.executescript('''
         CREATE TABLE IF NOT EXISTS bloques (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE);
         CREATE TABLE IF NOT EXISTS inmuebles (
@@ -70,13 +72,13 @@ def inicializar_db():
     conn.commit()
     conn.close()
 
+# Intentar inicializar al arrancar
 inicializar_db()
 
 # ==========================================
 # 2. MENÚ LATERAL CON LOGO
 # ==========================================
 with st.sidebar:
-    # Intentamos cargar el logo (asegúrate de que el archivo esté en la carpeta)
     try:
         st.image("alquileres.jpg", use_container_width=True)
     except:
@@ -88,10 +90,13 @@ with st.sidebar:
                      "🚨 4. Morosos", "📊 5. Caja", "⚙️ 6. Maestros"])
     
     st.divider()
-    if st.button("🚨 REINICIAR SISTEMA (CERO)"):
+    # Este botón es clave para solucionar tu error actual
+    if st.button("🚨 REINICIAR Y ACTUALIZAR TABLAS"):
         if os.path.exists('datos_alquileres.db'):
             os.remove('datos_alquileres.db')
         inicializar_db()
+        st.cache_data.clear()
+        st.success("Tablas actualizadas. Cargue los datos nuevamente.")
         st.rerun()
 
 # ==========================================
@@ -100,29 +105,33 @@ with st.sidebar:
 if menu == "🏠 1. Inventario":
     st.header("Estado de Unidades")
     conn = conectar()
-    df = pd.read_sql_query("""
-        SELECT i.id, b.nombre as Bloque, i.tipo as Unidad, 
-               i.precio_alquiler as [Alquiler ($)], 
-               i.costo_contrato as [Contrato ($)], 
-               i.deposito_base as [Depósito ($)],
-               c.fecha_fin, c.activo FROM inmuebles i
-        JOIN bloques b ON i.id_bloque = b.id
-        LEFT JOIN contratos c ON i.id = c.id_inmueble AND c.activo = 1
-    """, conn)
+    try:
+        df = pd.read_sql_query("""
+            SELECT i.id, b.nombre as Bloque, i.tipo as Unidad, 
+                   i.precio_alquiler as [Alquiler ($)], 
+                   i.costo_contrato as [Contrato ($)], 
+                   i.deposito_base as [Depósito ($)],
+                   c.fecha_fin, c.activo FROM inmuebles i
+            JOIN bloques b ON i.id_bloque = b.id
+            LEFT JOIN contratos c ON i.id = c.id_inmueble AND c.activo = 1
+        """, conn)
+        
+        if not df.empty:
+            def calc_estado(row):
+                if pd.isna(row['activo']) or row['activo'] == 0: return "🟢 LIBRE", "HOY"
+                return "🔴 OCUPADO", row['fecha_fin']
+
+            df[['Estado', 'Disponible']] = df.apply(lambda x: pd.Series(calc_estado(x)), axis=1)
+            for col in ['Alquiler ($)', 'Contrato ($)', 'Depósito ($)']:
+                df[col] = df[col].apply(fmt_moneda)
+
+            st.dataframe(df[["Bloque", "Unidad", "Estado", "Disponible", "Alquiler ($)", "Contrato ($)", "Depósito ($)"]], 
+                         use_container_width=True, hide_index=True)
+        else: st.info("No hay unidades cargadas en Maestros.")
+    except Exception as e:
+        st.error(f"Error de base de datos. Por favor, use el botón 'REINICIAR Y ACTUALIZAR' en la barra lateral.")
     conn.close()
 
-    if not df.empty:
-        def calc_estado(row):
-            if pd.isna(row['activo']) or row['activo'] == 0: return "🟢 LIBRE", "HOY"
-            return "🔴 OCUPADO", row['fecha_fin']
-
-        df[['Estado', 'Disponible']] = df.apply(lambda x: pd.Series(calc_estado(x)), axis=1)
-        for col in ['Alquiler ($)', 'Contrato ($)', 'Depósito ($)']:
-            df[col] = df[col].apply(fmt_moneda)
-
-        st.dataframe(df[["Bloque", "Unidad", "Estado", "Disponible", "Alquiler ($)", "Contrato ($)", "Depósito ($)"]], 
-                     use_container_width=True, hide_index=True)
-    else: st.info("Cargue unidades en Maestros para comenzar.")
 
 # ==========================================
 # 📝 2. NUEVO CONTRATO
