@@ -9,7 +9,7 @@ import os
 # ==========================================
 st.set_page_config(page_title="NL Propiedades - Gestión", page_icon="🏠", layout="wide")
 
-# Cambiar a True cuando el sistema ya tenga datos reales para ocultar el botón de reset
+# Cambiar a True para ocultar el botón de reset en producción
 ES_PRODUCCION = False 
 
 st.markdown("""
@@ -21,7 +21,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. MOTOR DE BASE DE DATOS Y MIGRACIONES (PROTECCIÓN DE DATOS)
+# 2. MOTOR DE BASE DE DATOS Y MIGRACIONES
 # ==========================================
 def conectar():
     return sqlite3.connect('datos_alquileres.db', check_same_thread=False, timeout=20)
@@ -29,8 +29,6 @@ def conectar():
 def inicializar_db():
     conn = conectar()
     c = conn.cursor()
-    
-    # Crear tablas base si no existen
     c.execute("CREATE TABLE IF NOT EXISTS bloques (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE)")
     c.execute("""CREATE TABLE IF NOT EXISTS inmuebles (
         id INTEGER PRIMARY KEY AUTOINCREMENT, id_bloque INTEGER, tipo TEXT, 
@@ -44,37 +42,23 @@ def inicializar_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT, id_contrato INTEGER, concepto TEXT, 
         mes_anio TEXT, monto_debe INTEGER, monto_pago INTEGER DEFAULT 0, pagado INTEGER DEFAULT 0, fecha_cobro DATE)""")
 
-    # --- MIGRACIÓN AUTOMÁTICA (Agrega columnas nuevas SIN borrar datos) ---
-    # Diccionario de columnas requeridas por tabla
+    # Migración automática de columnas
     migraciones = {
-        "inquilinos": [
-            ("celular", "TEXT"), ("dni", "TEXT"), ("direccion", "TEXT"), 
-            ("emergencia_contacto", "TEXT"), ("procedencia", "TEXT"), ("grupo", "TEXT")
-        ],
-        "inmuebles": [
-            ("precio_alquiler", "INTEGER"), ("costo_contrato", "INTEGER"), ("deposito_base", "INTEGER")
-        ]
+        "inquilinos": [("celular", "TEXT"), ("dni", "TEXT"), ("direccion", "TEXT"), ("emergencia_contacto", "TEXT"), ("procedencia", "TEXT"), ("grupo", "TEXT")],
+        "inmuebles": [("precio_alquiler", "INTEGER"), ("costo_contrato", "INTEGER"), ("deposito_base", "INTEGER")]
     }
-
     for tabla, columnas in migraciones.items():
-        # Obtenemos las columnas actuales de la tabla
         cursor = c.execute(f"PRAGMA table_info({tabla})")
-        columnas_existentes = [row[1] for row in cursor.fetchall()]
-        
-        for col_nombre, col_tipo in columnas:
-            if col_nombre not in columnas_existentes:
-                try:
-                    c.execute(f"ALTER TABLE {tabla} ADD COLUMN {col_nombre} {col_tipo}")
-                except Exception as e:
-                    pass # Ya existe o error controlado
-
+        existentes = [row[1] for row in cursor.fetchall()]
+        for col, tipo in columnas:
+            if col not in existentes:
+                try: c.execute(f"ALTER TABLE {tabla} ADD COLUMN {col} {tipo}")
+                except: pass
     conn.commit()
     conn.close()
 
-# Inicializamos el motor (No borra nada, solo actualiza la estructura)
 inicializar_db()
 
-# --- UTILIDADES ---
 def fmt_moneda(valor):
     try: return f"$ {int(float(valor or 0)):,}".replace(",", ".")
     except: return "$ 0"
@@ -92,7 +76,6 @@ with st.sidebar:
     except: st.title("NL PROPIEDADES")
     st.divider()
     menu = st.radio("Navegación:", ["🏠 1. Inventario", "📝 2. Nuevo Contrato", "💰 3. Cobranzas", "🚨 4. Morosos", "📊 5. Caja", "⚙️ 6. Maestros"])
-    
     if not ES_PRODUCCION:
         st.divider()
         if st.button("🚨 RESETEAR (BORRAR TODO)"):
@@ -101,7 +84,7 @@ with st.sidebar:
             st.rerun()
 
 # ==========================================
-# 4. SECCIONES (SINTAXIS SQL CORREGIDA)
+# 4. SECCIONES
 # ==========================================
 
 if menu == "🏠 1. Inventario":
@@ -109,7 +92,9 @@ if menu == "🏠 1. Inventario":
     conn = conectar()
     query = """
         SELECT b.nombre as Bloque, i.tipo as Unidad, 
-               i.precio_alquiler, i.costo_contrato, i.deposito_base,
+               i.precio_alquiler as [Alquiler Sug.], 
+               i.costo_contrato as [Contrato Sug.], 
+               i.deposito_base as [Depósito Sug.],
                MAX(c.fecha_fin) as Vencimiento, MAX(c.activo) as ocupado
         FROM inmuebles i
         JOIN bloques b ON i.id_bloque = b.id
@@ -120,146 +105,135 @@ if menu == "🏠 1. Inventario":
     conn.close()
     if not df.empty:
         df['Estado'] = df['ocupado'].apply(lambda x: "🔴 OCUPADO" if x == 1 else "🟢 LIBRE")
-        df['Alquiler Sug.'] = df['precio_alquiler'].apply(fmt_moneda)
-        st.dataframe(df[["Bloque", "Unidad", "Estado", "Vencimiento", "Alquiler Sug."]], use_container_width=True, hide_index=True)
-    else: st.info("Sin unidades.")
+        # Formateo de moneda para visualización
+        for col in ['Alquiler Sug.', 'Contrato Sug.', 'Depósito Sug.']:
+            df[col] = df[col].apply(fmt_moneda)
+        st.dataframe(df[["Bloque", "Unidad", "Estado", "Vencimiento", "Alquiler Sug.", "Contrato Sug.", "Depósito Sug."]], use_container_width=True, hide_index=True)
+    else: st.info("Sin unidades cargadas.")
 
 elif menu == "📝 2. Nuevo Contrato":
     st.header("Alta de Alquiler")
     conn = conectar()
     inm = pd.read_sql_query("SELECT i.id, b.nombre || ' - ' || i.tipo as ref, i.precio_alquiler, i.costo_contrato, i.deposito_base FROM inmuebles i JOIN bloques b ON i.id_bloque=b.id", conn)
     inq = pd.read_sql_query("SELECT id, nombre FROM inquilinos", conn)
-    
     if not inm.empty and not inq.empty:
         with st.form("f_contrato", clear_on_submit=True):
             c1, c2 = st.columns(2)
             id_u = c1.selectbox("Unidad", inm['id'].tolist(), format_func=lambda x: inm[inm['id']==x]['ref'].values[0])
             id_i = c2.selectbox("Inquilino", inq['id'].tolist(), format_func=lambda x: inq[inq['id']==x]['nombre'].values[0])
-            f_ini = c1.date_input("Inicio", date.today())
-            meses = c2.number_input("Meses", 1, 60, 6)
-            
+            f_ini = c1.date_input("Inicio", date.today()); meses = c2.number_input("Meses", 1, 60, 6)
             u_data = inm[inm['id']==id_u].iloc[0]
-            m_alq = c1.text_input("Monto Alquiler", value=str(int(u_data['precio_alquiler'] or 0)))
-            m_con = c2.text_input("Monto Contrato", value=str(int(u_data['costo_contrato'] or 0)))
-            m_dep = c1.text_input("Monto Depósito", value=str(int(u_data['deposito_base'] or 0)))
-            
+            m_alq = c1.text_input("Alquiler", value=str(int(u_data['precio_alquiler'] or 0)))
+            m_con = c2.text_input("Contrato", value=str(int(u_data['costo_contrato'] or 0)))
+            m_dep = st.text_input("Depósito", value=str(int(u_data['deposito_base'] or 0)))
             if st.form_submit_button("GRABAR CONTRATO"):
-                f_fin = f_ini + timedelta(days=meses*30)
-                cur = conn.cursor()
-                cur.execute("INSERT INTO contratos (id_inmueble, id_inquilino, fecha_inicio, fecha_fin, meses, monto_alquiler, monto_contrato, monto_deposito) VALUES (?,?,?,?,?,?,?,?)",
-                            (id_u, id_i, f_ini, f_fin, meses, limpiar_monto(m_alq), limpiar_monto(m_con), limpiar_monto(m_dep)))
-                id_c = cur.lastrowid
-                
-                mes_txt = f_ini.strftime("%m/%Y")
-                cur.executemany("INSERT INTO deudas (id_contrato, concepto, mes_anio, monto_debe) VALUES (?,?,?,?)", [
-                    (id_c, "Contrato", mes_txt, limpiar_monto(m_con)),
-                    (id_c, "Depósito", mes_txt, limpiar_monto(m_dep)),
-                    (id_c, "Mes 1", mes_txt, limpiar_monto(m_alq))
-                ])
+                f_fin = f_ini + timedelta(days=meses*30); cur = conn.cursor()
+                cur.execute("INSERT INTO contratos (id_inmueble, id_inquilino, fecha_inicio, fecha_fin, meses, monto_alquiler, monto_contrato, monto_deposito) VALUES (?,?,?,?,?,?,?,?)", (id_u, id_i, f_ini, f_fin, meses, limpiar_monto(m_alq), limpiar_monto(m_con), limpiar_monto(m_dep)))
+                id_c = cur.lastrowid; mes_txt = f_ini.strftime("%m/%Y")
+                cur.executemany("INSERT INTO deudas (id_contrato, concepto, mes_anio, monto_debe) VALUES (?,?,?,?)", [(id_c, "Contrato", mes_txt, limpiar_monto(m_con)), (id_c, "Depósito", mes_txt, limpiar_monto(m_dep)), (id_c, "Mes 1", mes_txt, limpiar_monto(m_alq))])
                 conn.commit(); st.success("Guardado."); st.rerun()
     conn.close()
 
 elif menu == "💰 3. Cobranzas":
     st.header("Gestión de Cobros")
     conn = conectar()
-    deudas = pd.read_sql_query("""
-        SELECT d.id, inq.nombre, i.tipo, d.concepto, d.mes_anio, d.monto_debe, d.monto_pago 
-        FROM deudas d JOIN contratos c ON d.id_contrato=c.id
-        JOIN inmuebles i ON c.id_inmueble=i.id JOIN inquilinos inq ON c.id_inquilino=inq.id
-        WHERE d.pagado = 0
-    """, conn)
+    deudas = pd.read_sql_query("""SELECT d.id, inq.nombre, i.tipo, d.concepto, d.mes_anio, d.monto_debe, d.monto_pago FROM deudas d JOIN contratos c ON d.id_contrato=c.id JOIN inmuebles i ON c.id_inmueble=i.id JOIN inquilinos inq ON c.id_inquilino=inq.id WHERE d.pagado = 0""", conn)
     for _, r in deudas.iterrows():
         with st.expander(f"💰 {r['nombre']} - {r['tipo']} ({r['concepto']})"):
             saldo = r['monto_debe'] - r['monto_pago']
-            pago = st.text_input(f"Cobrar", value=str(int(saldo)), key=f"p_{r['id']}")
-            if st.button("Cobrar Ahora", key=f"btn_{r['id']}"):
+            pago = st.text_input(f"Monto", value=str(int(saldo)), key=f"p_{r['id']}")
+            c1, c2 = st.columns(2)
+            if c1.button("Cobrar", key=f"btn_{r['id']}"):
                 nuevo_p = r['monto_pago'] + limpiar_monto(pago)
                 conn.execute("UPDATE deudas SET monto_pago=?, pagado=?, fecha_cobro=? WHERE id=?", (nuevo_p, 1 if nuevo_p>=r['monto_debe'] else 0, date.today(), r['id']))
                 conn.commit(); st.rerun()
-    conn.close()
-
-elif menu == "🚨 4. Morosos":
-    st.header("Reporte Morosidad")
-    conn = conectar()
-    df_m = pd.read_sql_query("""
-        SELECT inq.nombre as Inquilino, i.tipo as Unidad, d.concepto, d.mes_anio as Mes, (d.monto_debe - d.monto_pago) as Saldo 
-        FROM deudas d JOIN contratos c ON d.id_contrato=c.id 
-        JOIN inmuebles i ON c.id_inmueble=i.id JOIN inquilinos inq ON c.id_inquilino=inq.id 
-        WHERE d.pagado=0""", conn)
-    if not df_m.empty:
-        df_m['Saldo'] = df_m['Saldo'].apply(fmt_moneda)
-        st.dataframe(df_m, use_container_width=True, hide_index=True)
-    conn.close()
-
-elif menu == "📊 5. Caja":
-    st.header("Ingresos")
-    conn = conectar()
-    df_c = pd.read_sql_query("SELECT fecha_cobro as Fecha, concepto, monto_pago as Importe FROM deudas WHERE pagado=1", conn)
-    if not df_c.empty:
-        st.metric("Total", fmt_moneda(df_c['Importe'].sum()))
-        st.dataframe(df_c, use_container_width=True)
+            if c2.button("Borrar Cuota", key=f"del_{r['id']}"):
+                conn.execute("DELETE FROM deudas WHERE id=?", (r['id'],)); conn.commit(); st.rerun()
     conn.close()
 
 # ==========================================
-# 5. SECCIÓN 6: MAESTROS (CARGA COMPLETA)
+# 5. SECCIÓN 6: MAESTROS (EDICIÓN Y BORRADO)
 # ==========================================
 elif menu == "⚙️ 6. Maestros":
     st.header("Administración")
     t1, t2, t3, t4 = st.tabs(["👤 Inquilinos", "🏢 Bloques", "🏠 Unidades", "📋 Contratos"])
     
-    with t1:
+    with t1: # INQUILINOS
         con = conectar()
-        st.subheader("Carga Inquilinos")
-        with st.form("fi", clear_on_submit=True):
-            ca, cb = st.columns(2)
-            n, d = ca.text_input("Nombre"), cb.text_input("DNI")
-            c, p = ca.text_input("WhatsApp"), cb.text_input("Procedencia")
-            g, e = ca.text_input("Grupo"), cb.text_input("Emergencia")
-            if st.form_submit_button("Guardar Inquilino"):
-                con.execute("INSERT INTO inquilinos (nombre, celular, dni, procedencia, grupo, emergencia_contacto) VALUES (?,?,?,?,?,?)", (n, c, d, p, g, e))
-                con.commit(); st.rerun()
-        df_inq = pd.read_sql_query("SELECT nombre, dni, celular, procedencia, grupo FROM inquilinos", con)
-        st.dataframe(df_inq, use_container_width=True, hide_index=True)
-        con.close()
-
-    with t2:
-        con = conectar()
-        st.subheader("Carga Bloques")
-        with st.form("fb", clear_on_submit=True):
-            nb = st.text_input("Nuevo Bloque")
-            if st.form_submit_button("Guardar"):
-                con.execute("INSERT INTO bloques (nombre) VALUES (?)", (nb,))
-                con.commit(); st.rerun()
-        st.table(pd.read_sql_query("SELECT id, nombre FROM bloques", con))
-        con.close()
-
-    with t3:
-        con = conectar()
-        st.subheader("Carga Unidades")
-        bls = pd.read_sql_query("SELECT * FROM bloques", con)
-        if not bls.empty:
-            with st.form("fu", clear_on_submit=True):
-                ca, cb = st.columns(2)
-                idb = ca.selectbox("Bloque", bls['id'].tolist(), format_func=lambda x: bls[bls['id']==x]['nombre'].values[0])
-                tp = cb.text_input("Unidad")
-                m1, m2, m3 = st.columns(3)
-                p1 = m1.text_input("Alquiler")
-                p2 = m2.text_input("Contrato")
-                p3 = m3.text_input("Depósito")
-                if st.form_submit_button("Guardar Unidad"):
-                    con.execute("INSERT INTO inmuebles (id_bloque, tipo, precio_alquiler, costo_contrato, deposito_base) VALUES (?,?,?,?,?)", 
-                                (idb, tp, limpiar_monto(p1), limpiar_monto(p2), limpiar_monto(p3)))
+        inqs_df = pd.read_sql_query("SELECT * FROM inquilinos", con)
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            st.subheader("Carga / Edición")
+            modo_inq = st.radio("Acción Inquilino", ["Nuevo", "Editar"], horizontal=True)
+            v_id, v_nom, v_cel, v_dni, v_pro = None, "", "", "", ""
+            if modo_inq == "Editar" and not inqs_df.empty:
+                sel_i = st.selectbox("Elegir Inquilino", inqs_df['id'].tolist(), format_func=lambda x: inqs_df[inqs_df['id']==x]['nombre'].values[0])
+                f = inqs_df[inqs_df['id']==sel_i].iloc[0]
+                v_id, v_nom, v_cel, v_dni, v_pro = f['id'], f['nombre'], f['celular'], f['dni'], f['procedencia']
+            with st.form("f_inq", clear_on_submit=True):
+                f_nom = st.text_input("Nombre", value=v_nom); f_dni = st.text_input("DNI", value=v_dni)
+                f_cel = st.text_input("WhatsApp", value=v_cel); f_pro = st.text_input("Procedencia", value=v_pro)
+                if st.form_submit_button("Guardar"):
+                    if modo_inq == "Nuevo": con.execute("INSERT INTO inquilinos (nombre, celular, dni, procedencia) VALUES (?,?,?,?)", (f_nom, f_cel, f_dni, f_pro))
+                    else: con.execute("UPDATE inquilinos SET nombre=?, celular=?, dni=?, procedencia=? WHERE id=?", (f_nom, f_cel, f_dni, f_pro, v_id))
                     con.commit(); st.rerun()
-        df_u = pd.read_sql_query("SELECT b.nombre as Bloque, i.tipo as Unidad, i.precio_alquiler FROM inmuebles i JOIN bloques b ON i.id_bloque = b.id", con)
-        st.dataframe(df_u, use_container_width=True)
+        with col2:
+            st.subheader("Eliminar")
+            if not inqs_df.empty:
+                id_del = st.selectbox("Borrar Inquilino", inqs_df['id'].tolist(), format_func=lambda x: inqs_df[inqs_df['id']==x]['nombre'].values[0], key="del_inq")
+                if st.button("🗑️ ELIMINAR INQUILINO"):
+                    con.execute("DELETE FROM inquilinos WHERE id=?", (id_del,)); con.commit(); st.rerun()
         con.close()
 
-    with t4:
-        st.subheader("Contratos")
+    with t2: # BLOQUES
         con = conectar()
-        df_c = pd.read_sql_query("""
-            SELECT c.id, inq.nombre as Inquilino, i.tipo as Unidad, c.fecha_inicio, c.fecha_fin, c.activo
-            FROM contratos c JOIN inquilinos inq ON c.id_inquilino=inq.id
-            JOIN inmuebles i ON c.id_inmueble=i.id""", con)
+        st.subheader("Bloques")
+        bls_df = pd.read_sql_query("SELECT * FROM bloques", con)
+        c1, c2 = st.columns(2)
+        with c1:
+            nb = st.text_input("Nuevo Bloque")
+            if st.button("Guardar Bloque"): con.execute("INSERT INTO bloques (nombre) VALUES (?)", (nb,)); con.commit(); st.rerun()
+        with c2:
+            if not bls_df.empty:
+                id_b = st.selectbox("Borrar Bloque", bls_df['id'].tolist(), format_func=lambda x: bls_df[bls_df['id']==x]['nombre'].values[0])
+                if st.button("🗑️ ELIMINAR BLOQUE"): con.execute("DELETE FROM bloques WHERE id=?", (id_b,)); con.commit(); st.rerun()
+        con.close()
+
+    with t3: # UNIDADES
+        con = conectar()
+        st.subheader("Unidades")
+        bls = pd.read_sql_query("SELECT * FROM bloques", con)
+        unid_df = pd.read_sql_query("SELECT i.*, b.nombre as bloque_nom FROM inmuebles i JOIN bloques b ON i.id_bloque = b.id", con)
+        c1, c2 = st.columns(2)
+        with c1:
+            modo_u = st.radio("Acción Unidad", ["Nuevo", "Editar"], horizontal=True)
+            v_uid, v_utp, v_upr, v_uco, v_ude = None, "", "", "", ""
+            if modo_u == "Editar" and not unid_df.empty:
+                sel_u = st.selectbox("Elegir Unidad", unid_df['id'].tolist(), format_func=lambda x: f"{unid_df[unid_df['id']==x]['bloque_nom'].values[0]} - {unid_df[unid_df['id']==x]['tipo'].values[0]}")
+                fu = unid_df[unid_df['id']==sel_u].iloc[0]
+                v_uid, v_utp, v_upr, v_uco, v_ude = fu['id'], fu['tipo'], fu['precio_alquiler'], fu['costo_contrato'], fu['deposito_base']
+            with st.form("f_u"):
+                idb = st.selectbox("Bloque", bls['id'].tolist(), format_func=lambda x: bls[bls['id']==x]['nombre'].values[0])
+                tp = st.text_input("Unidad", value=v_utp)
+                p1 = st.text_input("Alquiler Sug.", value=str(v_upr)); p2 = st.text_input("Contrato Sug.", value=str(v_uco)); p3 = st.text_input("Depósito Sug.", value=str(v_ude))
+                if st.form_submit_button("Guardar Unidad"):
+                    if modo_u == "Nuevo": con.execute("INSERT INTO inmuebles (id_bloque, tipo, precio_alquiler, costo_contrato, deposito_base) VALUES (?,?,?,?,?)", (idb, tp, limpiar_monto(p1), limpiar_monto(p2), limpiar_monto(p3)))
+                    else: con.execute("UPDATE inmuebles SET id_bloque=?, tipo=?, precio_alquiler=?, costo_contrato=?, deposito_base=? WHERE id=?", (idb, tp, limpiar_monto(p1), limpiar_monto(p2), limpiar_monto(p3), v_uid))
+                    con.commit(); st.rerun()
+        with c2:
+            if not unid_df.empty:
+                id_ud = st.selectbox("Borrar Unidad", unid_df['id'].tolist(), format_func=lambda x: f"{unid_df[unid_df['id']==x]['bloque_nom'].values[0]} - {unid_df[unid_df['id']==x]['tipo'].values[0]}", key="del_u")
+                if st.button("🗑️ ELIMINAR UNIDAD"): con.execute("DELETE FROM inmuebles WHERE id=?", (id_ud,)); con.commit(); st.rerun()
+        con.close()
+
+    with t4: # CONTRATOS
+        con = conectar()
+        st.subheader("Contratos")
+        df_c = pd.read_sql_query("SELECT c.id, inq.nombre as Inquilino, i.tipo as Unidad, c.activo FROM contratos c JOIN inquilinos inq ON c.id_inquilino=inq.id JOIN inmuebles i ON c.id_inmueble=i.id", con)
         st.dataframe(df_c, use_container_width=True)
+        if not df_c.empty:
+            idc = st.selectbox("Borrar Contrato", df_c['id'].tolist(), format_func=lambda x: f"ID {x} - {df_c[df_c['id']==x]['Inquilino'].values[0]}")
+            if st.button("🗑️ ELIMINAR CONTRATO"):
+                con.execute("DELETE FROM deudas WHERE id_contrato=?", (idc,))
+                con.execute("DELETE FROM contratos WHERE id=?", (idc,)); con.commit(); st.rerun()
         con.close()
