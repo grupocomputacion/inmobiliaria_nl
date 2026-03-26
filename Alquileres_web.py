@@ -151,46 +151,122 @@ elif menu == "📊 Caja y Reportes":
         st.dataframe(filtro, use_container_width=True, hide_index=True)
     else: st.info("No hay pagos registrados.")
 
-# --- 5. MAESTROS ---
+# ==========================================
+# 6. MAESTROS (V.2.6 - ORDENADO Y EDITABLE)
+# ==========================================
 elif menu == "⚙️ Maestros":
-    t1, t2, t3, t4 = st.tabs(["Inquilinos", "Unidades", "Bloques", "Contratos Activos"])
+    st.header("Panel de Administración de Maestros")
     
+    # 1. ORDEN SOLICITADO: Bloques -> Unidades -> Inquilinos -> Contratos
+    t1, t2, t3, t4 = st.tabs(["🏢 Bloques", "🏠 Unidades", "👤 Inquilinos", "📋 Contratos Vivos"])
+    
+    # --- PESTAÑA 1: BLOQUES ---
     with t1:
-        with st.form("fi", clear_on_submit=True):
-            c1, c2 = st.columns(2)
-            n = c1.text_input("Nombre"); d = c1.text_input("DNI"); cel = c1.text_input("WhatsApp")
-            pro = c2.text_input("Procedencia"); gru = c2.text_input("Grupo"); eme = c2.text_input("Emergencia")
-            if st.form_submit_button("Guardar"):
-                db_query("INSERT INTO inquilinos (nombre, dni, celular, emergencia, procedencia, grupo) VALUES (?,?,?,?,?,?)", (n, d, cel, eme, pro, gru), commit=True); st.rerun()
-        st.dataframe(db_query("SELECT * FROM inquilinos"), use_container_width=True)
-
-    with t2:
-        bls = db_query("SELECT * FROM bloques")
-        with st.form("fu"):
-            bid = st.selectbox("Bloque", bls['id'].tolist(), format_func=lambda x: bls[bls['id']==x]['nombre'].values[0]) if not bls.empty else st.write("Cargue bloques")
-            ut = st.text_input("Nombre Unidad"); p1 = st.text_input("Alquiler Sug."); p2 = st.text_input("Contrato Sug."); p3 = st.text_input("Depósito Sug.")
-            if st.form_submit_button("Crear Unidad"):
-                db_query("INSERT INTO inmuebles (id_bloque, tipo, precio_alquiler, costo_contrato, deposito_base) VALUES (?,?,?,?,?)", (bid, ut, cl(p1), cl(p2), cl(p3)), commit=True); st.rerun()
+        st.subheader("Gestión de Bloques / Complejos")
+        with st.form("f_bloque", clear_on_submit=True):
+            nb = st.text_input("Nombre del Nuevo Bloque")
+            if st.form_submit_button("Guardar Bloque"):
+                db_query("INSERT INTO bloques (nombre) VALUES (?)", (nb,), commit=True)
+                st.rerun()
+        
+        df_b = db_query("SELECT id, nombre FROM bloques")
+        st.dataframe(df_b, use_container_width=True, hide_index=True)
         
         st.write("---")
-        id_e = st.number_input("ID Unidad para EDITAR o BORRAR", step=1, value=0)
-        if id_e > 0:
-            u_dat = db_query(f"SELECT * FROM inmuebles WHERE id={id_e}")
-            if not u_dat.empty:
-                new_p = st.text_input("Nuevo Alquiler Sugerido", value=f_m(u_dat['precio_alquiler'].iloc[0]))
-                if st.button("Actualizar Precio"): db_query(f"UPDATE inmuebles SET precio_alquiler={cl(new_p)} WHERE id={id_e}", commit=True); st.rerun()
-                if st.button("🗑️ Eliminar Unidad"): db_query(f"DELETE FROM inmuebles WHERE id={id_e}", commit=True); st.rerun()
+        st.subheader("Eliminar Bloque")
+        if not df_b.empty:
+            sel_b_del = st.selectbox("Seleccione Bloque para eliminar", df_b['nombre'].tolist(), key="del_b")
+            if st.button("🗑️ Eliminar Bloque"):
+                db_query("DELETE FROM bloques WHERE nombre=?", (sel_b_del,), commit=True)
+                st.rerun()
 
+    # --- PESTAÑA 2: UNIDADES (EDICIÓN COMPLETA POR DESCRIPCIÓN) ---
+    with t2:
+        st.subheader("Gestión de Unidades")
+        bls_u = db_query("SELECT * FROM bloques")
+        
+        if not bls_u.empty:
+            # ALTA
+            with st.expander("➕ Cargar Nueva Unidad"):
+                with st.form("f_u_alta", clear_on_submit=True):
+                    bid = st.selectbox("Bloque", bls_u['id'].tolist(), format_func=lambda x: bls_u[bls_u['id']==x]['nombre'].values[0])
+                    ut = st.text_input("Descripción de la Unidad (Ej: Local 1)")
+                    p1 = st.text_input("Alquiler Sugerido")
+                    p2 = st.text_input("Gasto Contrato Sugerido")
+                    p3 = st.text_input("Depósito Sugerido")
+                    if st.form_submit_button("Crear Unidad"):
+                        db_query("INSERT INTO inmuebles (id_bloque, tipo, precio_alquiler, costo_contrato, deposito_base) VALUES (?,?,?,?,?)", 
+                                 (bid, ut, cl(p1), cl(p2), cl(p3)), commit=True); st.rerun()
+
+            st.write("---")
+            # EDICIÓN POR DESCRIPCIÓN
+            st.subheader("📝 Editar Unidad Existente")
+            df_u_edit = db_query("SELECT id, tipo FROM inmuebles")
+            if not df_u_edit.empty:
+                sel_u_edit = st.selectbox("Seleccione la Unidad a modificar", df_u_edit['tipo'].tolist())
+                u_actual = db_query("SELECT * FROM inmuebles WHERE tipo=?", (sel_u_edit,)).iloc[0]
+                
+                with st.form("f_u_edit"):
+                    new_desc = st.text_input("Nueva Descripción", value=u_actual['tipo'])
+                    new_alq = st.text_input("Alquiler", value=f_m(u_actual['precio_alquiler']))
+                    new_con = st.text_input("Contrato", value=f_m(u_actual['costo_contrato']))
+                    new_dep = st.text_input("Depósito", value=f_m(u_actual['deposito_base']))
+                    
+                    c_ed1, c_ed2 = st.columns(2)
+                    if c_ed1.form_submit_button("💾 Guardar Cambios"):
+                        db_query("""UPDATE inmuebles SET tipo=?, precio_alquiler=?, costo_contrato=?, deposito_base=? 
+                                    WHERE id=?""", (new_desc, cl(new_alq), cl(new_con), cl(new_dep), u_actual['id']), commit=True)
+                        st.success("Unidad actualizada"); st.rerun()
+                    
+                    if c_ed2.form_submit_button("🗑️ ELIMINAR UNIDAD"):
+                        db_query("DELETE FROM inmuebles WHERE id=?", (u_actual['id'],), commit=True)
+                        st.rerun()
+
+    # --- PESTAÑA 3: INQUILINOS (CAMPOS EXTENDIDOS) ---
     with t3:
-        nb = st.text_input("Nuevo Bloque")
-        if st.button("Guardar Bloque"): db_query("INSERT INTO bloques (nombre) VALUES (?)", (nb,), commit=True); st.rerun()
-        st.table(db_query("SELECT * FROM bloques"))
+        st.subheader("Ficha de Inquilinos")
+        with st.form("f_inq_alta", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            inq_n = c1.text_input("Nombre Completo"); inq_d = c1.text_input("DNI/CUIT"); inq_c = c1.text_input("Celular")
+            inq_p = c2.text_input("Procedencia"); inq_g = c2.text_input("Grupo"); inq_e = c2.text_input("Emergencia")
+            if st.form_submit_button("Registrar Inquilino"):
+                db_query("INSERT INTO inquilinos (nombre, dni, celular, procedencia, grupo, emergencia) VALUES (?,?,?,?,?,?)", 
+                         (inq_n, inq_d, inq_c, inq_p, inq_g, inq_e), commit=True); st.rerun()
+        
+        st.write("---")
+        df_inq_list = db_query("SELECT id, nombre, dni, celular, grupo FROM inquilinos")
+        st.dataframe(df_inq_list, use_container_width=True, hide_index=True)
+        
+        if not df_inq_list.empty:
+            sel_inq_del = st.selectbox("Seleccione Inquilino para ELIMINAR", df_inq_list['nombre'].tolist())
+            if st.button("🗑️ Borrar Inquilino"):
+                db_query("DELETE FROM inquilinos WHERE nombre=?", (sel_inq_del,), commit=True); st.rerun()
 
+    # --- PESTAÑA 4: CONTRATOS VIVOS ---
     with t4:
-        df_con = db_query("""
-            SELECT c.id, inq.nombre as Inquilino, i.tipo as Unidad, c.fecha_fin as Vencimiento 
-            FROM contratos c JOIN inquilinos inq ON c.id_inquilino=inq.id JOIN inmuebles i ON c.id_inmueble=i.id
+        st.subheader("Auditoría de Contratos Activos")
+        df_cv = db_query("""
+            SELECT c.id, inq.nombre as Inquilino, i.tipo as Unidad, 
+                   c.fecha_inicio as [F. Inicio], c.fecha_fin as [F. Vencimiento], 
+                   c.monto_alquiler as Monto
+            FROM contratos c 
+            JOIN inquilinos inq ON c.id_inquilino = inq.id 
+            JOIN inmuebles i ON c.id_inmueble = i.id
+            WHERE c.activo = 1
         """)
-        st.dataframe(df_con, use_container_width=True, hide_index=True)
-        idc = st.number_input("ID Contrato a borrar", step=1, value=0)
-        if st.button("🗑️ Eliminar Contrato"): db_query(f"DELETE FROM contratos WHERE id={idc}", commit=True); st.rerun()
+        
+        if not df_cv.empty:
+            # Formato de miles para la tabla
+            df_cv['Monto'] = df_cv['Monto'].apply(f_m)
+            st.dataframe(df_cv, use_container_width=True, hide_index=True)
+            
+            st.write("---")
+            sel_c_del = st.selectbox("Seleccione Contrato para DAR DE BAJA (por Inquilino - Unidad)", 
+                                    df_cv.apply(lambda r: f"{r['id']} - {r['Inquilino']} ({r['Unidad']})", axis=1).tolist())
+            c_id_del = sel_c_del.split(" - ")[0]
+            
+            if st.button("🚨 ANULAR CONTRATO SELECCIONADO"):
+                db_query("DELETE FROM contratos WHERE id=?", (c_id_del,), commit=True)
+                st.warning(f"Contrato {c_id_del} y sus deudas han sido eliminados."); st.rerun()
+        else:
+            st.info("No existen contratos activos en la base de datos.")
