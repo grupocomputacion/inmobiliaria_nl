@@ -56,7 +56,7 @@ with st.sidebar:
     else: st.title("🏠 NL PROPIEDADES")
     
     st.info("🚀 VERSIÓN: V.2.4 - REVISIÓN FINAL")
-    menu = st.radio("MENÚ:", ["🏠 Inventario", "📝 Nuevo Contrato", "💰 Cobranzas", "📊 Caja y Reportes", "⚙️ Maestros"])
+    menu = st.radio("MENÚ:", ["🏠 Inventario", "📝 Nuevo Contrato", "💰 Cobranzas", "🚨 Morosos", "📊 Caja y Reportes", "⚙️ Maestros"])
     
     if st.button("🚨 RESET BASE (CUIDADO)"):
         if os.path.exists('datos_alquileres.db'): os.remove('datos_alquileres.db')
@@ -131,7 +131,47 @@ elif menu == "💰 Cobranzas":
                     st.rerun()
     else: st.info("Sin deudas pendientes.")
 
-# --- 4. CAJA Y REPORTES ---
+# ==========================================
+# 4. MOROSOS (V.2.7 - RECUPERADO Y FORMATEADO)
+# ==========================================
+elif menu == "🚨 Morosos":
+    st.header("Reporte de Saldos Deudores")
+    
+    # Buscamos deudas no pagadas (pagado = 0)
+    query_morosos = """
+        SELECT 
+            inq.nombre as Inquilino, 
+            i.tipo as Unidad, 
+            d.concepto as Concepto, 
+            (d.monto_debe - d.monto_pago) as Saldo_Pendiente
+        FROM deudas d
+        JOIN contratos c ON d.id_contrato = c.id
+        JOIN inmuebles i ON c.id_inmueble = i.id
+        JOIN inquilinos inq ON c.id_inquilino = inq.id
+        WHERE d.pagado = 0 AND (d.monto_debe - d.monto_pago) > 0
+    """
+    
+    df_morosos = db_query(query_morosos)
+    
+    if df_morosos is not None and not df_morosos.empty:
+        # Total general de morosidad para la métrica
+        total_mora = df_morosos['Saldo_Pendiente'].sum()
+        st.metric("Total Deuda Pendiente", f"$ {f_m(total_mora)}")
+        
+        # Formateamos la columna de Saldo con puntos
+        df_display_mora = df_morosos.copy()
+        df_display_mora['Saldo_Pendiente'] = df_display_mora['Saldo_Pendiente'].apply(f_m)
+        
+        # Mostramos la tabla profesional
+        st.table(df_display_mora)
+        
+        # Opción de descarga rápida
+        csv_mora = df_morosos.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Exportar Lista de Morosos (CSV)", csv_mora, "Morosos_NL.csv", "text/csv")
+    else:
+        st.success("✅ ¡Excelente! No se registran saldos pendientes en el sistema.")    
+
+# --- 5. CAJA Y REPORTES ---
 elif menu == "📊 Caja y Reportes":
     st.header("Reporte de Caja")
     df_c = db_query("""
