@@ -346,13 +346,14 @@ elif menu == "⚙️ Maestros":
     
     # Definimos las 5 pestañas: las 4 de gestión + la de respaldo
 
-    t1, t2, t3, t4, t5, t6 = st.tabs([
+    t1, t2, t3, t4, t5, t6, t7 = st.tabs([
         "🏢 Inmuebles",
         "🏠 Unidades",
         "👤 Inquilinos", 
         "📋 Contratos",
         "💾 Backup",
         "📋 Listado de Alquilados"
+        "⚙️ Generación Mensual"
     ])
     # --- 1. INMUEBLES ---
     with t1:
@@ -510,7 +511,7 @@ elif menu == "⚙️ Maestros":
                     st.success("✅ Datos restaurados."); st.rerun()
                 except Exception as e: st.error(f"Error: {e}")
 
-# --- 6. LISTADO DE ALQUILADOS (NUEVA CONSULTA) ---
+    # --- 6. LISTADO DE ALQUILADOS (NUEVA CONSULTA) ---
     with t6:
         st.subheader("Unidades Alquiladas y Contacto")
         
@@ -550,6 +551,58 @@ elif menu == "⚙️ Maestros":
             )
         else:
             st.info("No hay unidades con contratos activos en este momento.")                
+
+    # --- 7. GENERACIÓN MASIVA DE DEUDAS (NUEVA FUNCIÓN) ---
+    with t7:
+        st.subheader("Generación de Alquileres del Mes")
+        st.info("Esta herramienta creará el cargo de alquiler para TODOS los contratos activos en el mes seleccionado.")
+        
+        with st.form("f_generacion_masiva"):
+            c1, c2 = st.columns(2)
+            mes_gen = c1.selectbox("Mes a generar", 
+                                   ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", 
+                                    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"],
+                                   index=date.today().month - 1)
+            anio_gen = c2.number_input("Año", value=date.today().year, step=1)
+            
+            confirmar = st.checkbox("Confirmo que deseo generar los cargos para todos los contratos activos.")
+            
+            if st.form_submit_button("🚀 Generar Cargos Masivos"):
+                if confirmar:
+                    # Traemos todos los contratos activos
+                    contratos_activos = db_query("SELECT id, monto_alquiler FROM contratos WHERE activo = 1")
+                    
+                    if contratos_activos is not None and not contratos_activos.empty:
+                        contador = 0
+                        error_count = 0
+                        concepto = f"Alquiler {mes_gen} {anio_gen}"
+                        
+                        for _, fila in contratos_activos.iterrows():
+                            try:
+                                # Verificamos si ya existe el cargo para evitar duplicados
+                                check = db_query("SELECT id FROM deudas WHERE id_contrato=? AND concepto=?", 
+                                                (int(fila['id']), concepto))
+                                
+                                if check is None or check.empty:
+                                    db_query("""INSERT INTO deudas (id_contrato, concepto, monto_debe, monto_pago, pagado) 
+                                             VALUES (?, ?, ?, 0, 0)""", 
+                                             (int(fila['id']), concepto, int(fila['monto_alquiler'])), commit=True)
+                                    contador += 1
+                            except:
+                                error_count += 1
+                        
+                        if contador > 0:
+                            st.success(f"✅ Se generaron {contador} cargos de alquiler exitosamente.")
+                        if error_count > 0:
+                            st.error(f"❌ Hubo errores en {error_count} registros.")
+                        if contador == 0 and error_count == 0:
+                            st.warning("No se generaron cargos nuevos (posiblemente ya existían para este mes).")
+                        
+                        st.rerun()
+                    else:
+                        st.warning("No se encontraron contratos activos para generar cargos.")
+                else:
+                    st.error("Por favor, marque la casilla de confirmación.")
 
 # ==========================================
 # 1. INVENTARIO (V.6.8 - VISTA LIMPIA)
