@@ -303,13 +303,21 @@ elif menu == "📊 Caja":
     if df_c is not None: st.dataframe(df_c)
 
 # ==========================================
-# 6. MAESTROS (V.5.1 - GESTIÓN INTEGRAL)
+# 6. MAESTROS (V.6.8 - INTEGRACIÓN TOTAL)
 # ==========================================
 elif menu == "⚙️ Maestros":
     st.header("Administración de Base de Datos")
-    t1, t2, t3, t4 = st.tabs(["🏢 Inmuebles", "🏠 Unidades", "👤 Inquilinos", "📋 Contratos"])
+    
+    # Definimos las 5 pestañas: las 4 de gestión + la de respaldo
+    t1, t2, t3, t4, t5 = st.tabs([
+        "🏢 Inmuebles", 
+        "🏠 Unidades", 
+        "👤 Inquilinos", 
+        "📋 Contratos", 
+        "💾 Respaldo y Recuperación"
+    ])
 
-    # --- 1. INMUEBLES (EX BLOQUES) ---
+    # --- 1. INMUEBLES ---
     with t1:
         st.subheader("Edificios y Complejos")
         with st.expander("➕ Cargar Nuevo Inmueble"):
@@ -412,7 +420,7 @@ elif menu == "⚙️ Maestros":
                 if col_i2.form_submit_button("🗑️ Borrar Inquilino"):
                     db_query(f"DELETE FROM inquilinos WHERE id={i_dat['id']}", commit=True); st.rerun()
 
-    # --- 4. CONTRATOS VIVOS ---
+    # --- 4. CONTRATOS ---
     with t4:
         st.subheader("Contratos Vigentes")
         df_cont = db_query("""SELECT c.id, b.nombre as Inmueble, i.tipo as Unidad, inq.nombre as Inquilino, c.fecha_inicio, c.monto_alquiler 
@@ -428,71 +436,47 @@ elif menu == "⚙️ Maestros":
         else:
             st.info("No hay contratos activos registrados.")
 
-# ==========================================
-# 7. SISTEMA DE BACKUP Y RESTORE (EXCEL)
-# ==========================================
-st.write("---")
-st.subheader("💾 Respaldo y Recuperación de Datos")
-col_back, col_rest = st.columns(2)
+    # --- 5. BACKUP & RESTORE (MOVIDO AQUÍ) ---
+    with t5:
+        st.subheader("💾 Gestión de Respaldo y Recuperación")
+        c_exp, c_imp = st.columns(2)
+        
+        with c_exp:
+            st.write("**Exportar base de datos**")
+            if st.button("Generar Archivo de Respaldo"):
+                try:
+                    output = io.BytesIO()
+                    df_b = db_query("SELECT * FROM bloques")
+                    df_i = db_query("SELECT * FROM inmuebles")
+                    df_inq = db_query("SELECT * FROM inquilinos")
+                    df_con = db_query("SELECT * FROM contratos")
+                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                        if df_b is not None: df_b.to_excel(writer, sheet_name='Inmuebles', index=False)
+                        if df_i is not None: df_i.to_excel(writer, sheet_name='Unidades', index=False)
+                        if df_inq is not None: df_inq.to_excel(writer, sheet_name='Inquilinos', index=False)
+                        if df_con is not None: df_con.to_excel(writer, sheet_name='Contratos', index=False)
+                    st.download_button("📥 Descargar Excel", output.getvalue(), f"Backup_NL_{date.today()}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                except Exception as e: st.error(f"Error: {e}")
 
-with col_back:
-    st.markdown("**Exportar datos actuales**")
-    if st.button("Generar Archivo de Respaldo"):
-        try:
-            output = io.BytesIO()
-            # Traemos todas las tablas principales
-            df_b = db_query("SELECT * FROM bloques")
-            df_i = db_query("SELECT * FROM inmuebles")
-            df_inq = db_query("SELECT * FROM inquilinos")
-            df_con = db_query("SELECT * FROM contratos")
-            
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                if df_b is not None: df_b.to_excel(writer, sheet_name='Inmuebles', index=False)
-                if df_i is not None: df_i.to_excel(writer, sheet_name='Unidades', index=False)
-                if df_inq is not None: df_inq.to_excel(writer, sheet_name='Inquilinos', index=False)
-                if df_con is not None: df_con.to_excel(writer, sheet_name='Contratos', index=False)
-            
-            st.download_button(
-                label="📥 Descargar Excel de Respaldo",
-                data=output.getvalue(),
-                file_name=f"Backup_Inmobiliaria_{date.today()}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        except Exception as e:
-            st.error(f"Error al exportar: {e}")
-
-with col_rest:
-    st.markdown("**Importar desde Excel**")
-    archivo_subido = st.file_uploader("Subir archivo de respaldo (.xlsx)", type=["xlsx"])
-    if archivo_subido and st.button("🚀 Iniciar Recuperación"):
-        try:
-            # Leemos las solapas
-            dict_dfs = pd.read_excel(archivo_subido, sheet_name=None)
-            
-            mapping = {
-                'Inmuebles': 'bloques',
-                'Unidades': 'inmuebles',
-                'Inquilinos': 'inquilinos',
-                'Contratos': 'contratos'
-            }
-            
-            with sqlite3.connect('datos_alquileres.db') as conn:
-                for sheet, tabla in mapping.items():
-                    if sheet in dict_dfs:
-                        df_temp = dict_dfs[sheet]
-                        # 'to_sql' con 'append' agregará los datos. 
-                        # Nota: Esto asume que la base está limpia o vacía para evitar conflictos de ID.
-                        df_temp.to_sql(tabla, conn, if_exists='append', index=False)
-            
-            st.success("✅ Datos recuperados con éxito. Reiniciando...")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Error al importar: {e}. Asegúrese de que el archivo sea un backup válido.")
+        with c_imp:
+            st.write("**Importar desde Excel**")
+            archivo = st.file_uploader("Subir respaldo (.xlsx)", type=["xlsx"])
+            if archivo and st.button("🚀 Iniciar Recuperación"):
+                try:
+                    dfs = pd.read_excel(archivo, sheet_name=None)
+                    mapping = {'Inmuebles': 'bloques', 'Unidades': 'inmuebles', 'Inquilinos': 'inquilinos', 'Contratos': 'contratos'}
+                    with sqlite3.connect('datos_alquileres.db') as conn:
+                        for sheet, tabla in mapping.items():
+                            if sheet in dfs:
+                                conn.execute(f"DELETE FROM {tabla}") # Limpiamos antes de restaurar
+                                dfs[sheet].to_sql(tabla, conn, if_exists='append', index=False)
+                    st.success("✅ Datos restaurados."); st.rerun()
+                except Exception as e: st.error(f"Error: {e}")
 
 # ==========================================
-# 8. INVENTARIO ACTUALIZADO (V.6.0)
+# 1. INVENTARIO (V.6.8 - VISTA LIMPIA)
 # ==========================================
-if menu == "🏠 Inventario":
+elif menu == "🏠 Inventario":
     st.header("Estado de Unidades y Disponibilidad")
     
     query_inv = """
@@ -527,4 +511,6 @@ if menu == "🏠 Inventario":
             if col in df.columns:
                 df[col] = df[col].apply(f_m)
         
-        st.dataframe(df, use_container_width=True, hide_index=True)            
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No hay unidades cargadas en el sistema.")
