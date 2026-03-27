@@ -115,7 +115,8 @@ En prueba de conformidad, se firman dos ejemplares de un mismo tenor en la ciuda
     pdf.cell(90, 8, 'DNI/CUIT: 30-71884850-0', 0, 0, 'L')
     pdf.cell(90, 8, f"DNI: {datos_i['dni']}", 0, 1, 'R')
     
-    return pdf.output(dest='S').encode('latin-1')
+# ELIMINAMOS el .encode('latin-1') del final porque output(dest='S') ya entrega bytes
+    return pdf.output(dest='S')
 
 
 # ==========================================
@@ -194,12 +195,14 @@ elif menu == "📝 Nuevo Contrato":
                 # Generar PDF con los datos validados
                 try:
                     pdf_bytes = generar_pdf_v5(sel_u, i_df[i_df['id']==iid].iloc[0], fini, ma, md, mc)
-                    st.session_state['pdf_ready'] = pdf_bytes
+                    
+                    # Verificación de seguridad: si es bytearray, Streamlit lo acepta, 
+                    # pero lo ideal es pasarle bytes puros.
+                    st.session_state['pdf_ready'] = bytes(pdf_bytes) 
                     st.session_state['cid_last'] = cid
                     st.success(f"Contrato {cid} grabado. Vence el {f_vence.strftime('%d/%m/%Y')}")
                 except Exception as e:
-                    st.error(f"Error al generar PDF: {e}. Verifique que las columnas existan.")
-
+                    st.error(f"Error al generar PDF: {e}")
         if 'pdf_ready' in st.session_state:
             st.write("---")
             st.download_button("📥 DESCARGAR CONTRATO PDF", st.session_state['pdf_ready'], f"Contrato_NL_{st.session_state['cid_last']}.pdf", "application/pdf")
