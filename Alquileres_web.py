@@ -21,7 +21,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. MOTOR DE DATOS (ESTRUCTURA FINAL)
+# 2. MOTOR DE DATOS CON MIGRACIÓN SEGURA (V.6.0)
 # ==========================================
 def db_query(sql, params=(), commit=False):
     try:
@@ -33,24 +33,56 @@ def db_query(sql, params=(), commit=False):
                 return cur.lastrowid
             return pd.read_sql_query(sql, conn, params=params)
     except Exception as e:
+        # Si falla una consulta por columna inexistente, no explota la app
         return None
 
-def inicializar_todo():
-    db_query("""CREATE TABLE IF NOT EXISTS bloques (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                nombre TEXT, direccion TEXT, barrio TEXT, localidad TEXT)""", commit=True)
-    db_query("""CREATE TABLE IF NOT EXISTS inquilinos (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                nombre TEXT, dni TEXT, celular TEXT, emergencia TEXT, procedencia TEXT, grupo TEXT)""", commit=True)
-    db_query("""CREATE TABLE IF NOT EXISTS inmuebles (id INTEGER PRIMARY KEY AUTOINCREMENT, id_bloque INTEGER, 
-                tipo TEXT, precio_alquiler INTEGER, costo_contrato INTEGER, deposito_base INTEGER)""", commit=True)
-    db_query("""CREATE TABLE IF NOT EXISTS contratos (id INTEGER PRIMARY KEY AUTOINCREMENT, id_inmueble INTEGER, 
-                id_inquilino INTEGER, fecha_inicio DATE, fecha_fin DATE, monto_alquiler INTEGER, activo INTEGER DEFAULT 1)""", commit=True)
-    db_query("""CREATE TABLE IF NOT EXISTS deudas (id INTEGER PRIMARY KEY AUTOINCREMENT, id_contrato INTEGER, 
-                concepto TEXT, monto_debe INTEGER, monto_pago INTEGER DEFAULT 0, pagado INTEGER DEFAULT 0, fecha_pago DATE)""", commit=True)
+def mantenimiento_base():
+    """ Revisa y actualiza la estructura sin borrar datos """
+    with sqlite3.connect('datos_alquileres.db') as conn:
+        cur = conn.cursor()
+        
+        # 1. Crear tablas si no existen
+        cur.execute("CREATE TABLE IF NOT EXISTS bloques (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT)")
+        cur.execute("CREATE TABLE IF NOT EXISTS inquilinos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT)")
+        cur.execute("CREATE TABLE IF NOT EXISTS inmuebles (id INTEGER PRIMARY KEY AUTOINCREMENT, id_bloque INTEGER, tipo TEXT)")
+        cur.execute("CREATE TABLE IF NOT EXISTS contratos (id INTEGER PRIMARY KEY AUTOINCREMENT, id_inmueble INTEGER, id_inquilino INTEGER)")
+        cur.execute("CREATE TABLE IF NOT EXISTS deudas (id INTEGER PRIMARY KEY AUTOINCREMENT, id_contrato INTEGER, concepto TEXT)")
 
-inicializar_todo()
+        # 2. DICCIONARIO DE COLUMNAS NECESARIAS (El 'Seguro de Vida' de los datos)
+        # Formato: (Tabla, Columna, Tipo)
+        columnas_plan = [
+            ("bloques", "direccion", "TEXT"),
+            ("bloques", "barrio", "TEXT"),
+            ("bloques", "localidad", "TEXT"),
+            ("inmuebles", "precio_alquiler", "INTEGER"),
+            ("inmuebles", "costo_contrato", "INTEGER"),
+            ("inmuebles", "deposito_base", "INTEGER"),
+            ("inquilinos", "dni", "TEXT"),
+            ("inquilinos", "celular", "TEXT"),
+            ("inquilinos", "procedencia", "TEXT"),
+            ("inquilinos", "grupo", "TEXT"),
+            ("inquilinos", "emergencia", "TEXT"),
+            ("contratos", "fecha_inicio", "DATE"),
+            ("contratos", "fecha_fin", "DATE"),
+            ("contratos", "monto_alquiler", "INTEGER"),
+            ("contratos", "activo", "INTEGER DEFAULT 1"),
+            ("deudas", "monto_debe", "INTEGER"),
+            ("deudas", "monto_pago", "INTEGER DEFAULT 0"),
+            ("deudas", "pagado", "INTEGER DEFAULT 0"),
+            ("deudas", "fecha_pago", "DATE")
+        ]
 
-def cl(t): return int(str(t).replace('$', '').replace('.', '').replace(',', '').strip() or 0)
-def f_m(v): return f"{int(v or 0):,}".replace(",", ".")
+        # Inyectar columnas faltantes una por una
+        for tabla, columna, tipo in columnas_plan:
+            try:
+                cur.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}")
+            except sqlite3.OperationalError:
+                # Si la columna ya existe, SQLite da error y simplemente la salteamos
+                pass
+        conn.commit()
+
+# Ejecutar SIEMPRE al iniciar
+mantenimiento_base()
 
 # ==========================================
 # 3. GENERADOR DE PDF (TEXTO LEGAL ÍNTEGRO V.5.3)
@@ -395,3 +427,104 @@ elif menu == "⚙️ Maestros":
                 st.rerun()
         else:
             st.info("No hay contratos activos registrados.")
+
+# ==========================================
+# 7. SISTEMA DE BACKUP Y RESTORE (EXCEL)
+# ==========================================
+st.write("---")
+st.subheader("💾 Respaldo y Recuperación de Datos")
+col_back, col_rest = st.columns(2)
+
+with col_back:
+    st.markdown("**Exportar datos actuales**")
+    if st.button("Generar Archivo de Respaldo"):
+        try:
+            output = io.BytesIO()
+            # Traemos todas las tablas principales
+            df_b = db_query("SELECT * FROM bloques")
+            df_i = db_query("SELECT * FROM inmuebles")
+            df_inq = db_query("SELECT * FROM inquilinos")
+            df_con = db_query("SELECT * FROM contratos")
+            
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                if df_b is not None: df_b.to_excel(writer, sheet_name='Inmuebles', index=False)
+                if df_i is not None: df_i.to_excel(writer, sheet_name='Unidades', index=False)
+                if df_inq is not None: df_inq.to_excel(writer, sheet_name='Inquilinos', index=False)
+                if df_con is not None: df_con.to_excel(writer, sheet_name='Contratos', index=False)
+            
+            st.download_button(
+                label="📥 Descargar Excel de Respaldo",
+                data=output.getvalue(),
+                file_name=f"Backup_Inmobiliaria_{date.today()}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        except Exception as e:
+            st.error(f"Error al exportar: {e}")
+
+with col_rest:
+    st.markdown("**Importar desde Excel**")
+    archivo_subido = st.file_uploader("Subir archivo de respaldo (.xlsx)", type=["xlsx"])
+    if archivo_subido and st.button("🚀 Iniciar Recuperación"):
+        try:
+            # Leemos las solapas
+            dict_dfs = pd.read_excel(archivo_subido, sheet_name=None)
+            
+            mapping = {
+                'Inmuebles': 'bloques',
+                'Unidades': 'inmuebles',
+                'Inquilinos': 'inquilinos',
+                'Contratos': 'contratos'
+            }
+            
+            with sqlite3.connect('datos_alquileres.db') as conn:
+                for sheet, tabla in mapping.items():
+                    if sheet in dict_dfs:
+                        df_temp = dict_dfs[sheet]
+                        # 'to_sql' con 'append' agregará los datos. 
+                        # Nota: Esto asume que la base está limpia o vacía para evitar conflictos de ID.
+                        df_temp.to_sql(tabla, conn, if_exists='append', index=False)
+            
+            st.success("✅ Datos recuperados con éxito. Reiniciando...")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error al importar: {e}. Asegúrese de que el archivo sea un backup válido.")
+
+# ==========================================
+# 8. INVENTARIO ACTUALIZADO (V.6.0)
+# ==========================================
+if menu == "🏠 Inventario":
+    st.header("Estado de Unidades y Disponibilidad")
+    
+    query_inv = """
+        SELECT 
+            b.nombre as Inmueble, 
+            i.tipo as Unidad, 
+            i.precio_alquiler as Alquiler, 
+            i.costo_contrato as Contrato, 
+            i.deposito_base as Deposito,
+            CASE WHEN c.activo = 1 THEN '🔴 OCUPADO' ELSE '🟢 LIBRE' END as Estado,
+            CASE 
+                WHEN c.activo = 1 THEN c.fecha_fin 
+                ELSE 'DISPONIBLE HOY' 
+            END as [Disponible Desde]
+        FROM inmuebles i 
+        JOIN bloques b ON i.id_bloque = b.id
+        LEFT JOIN contratos c ON i.id = c.id_inmueble AND c.activo = 1
+    """
+    df = db_query(query_inv)
+
+    if df is not None and not df.empty:
+        c1, c2 = st.columns(2)
+        total_u = len(df)
+        libres_count = len(df[df['Estado'].str.contains('LIBRE', na=False)])
+        
+        c1.metric("Unidades Libres", libres_count)
+        c2.metric("Total Unidades", total_u)
+        
+        # Formateo de moneda
+        cols_money = ['Alquiler', 'Contrato', 'Deposito']
+        for col in cols_money:
+            if col in df.columns:
+                df[col] = df[col].apply(f_m)
+        
+        st.dataframe(df, use_container_width=True, hide_index=True)            
