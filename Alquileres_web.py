@@ -352,7 +352,7 @@ elif menu == "⚙️ Maestros":
         "👤 Inquilinos", 
         "📋 Contratos",
         "💾 Backup",
-        "📋 Listado de Alquilados"
+        "📋 Listado de Alquilados",
         "⚙️ Generación Mensual"
     ])
     # --- 1. INMUEBLES ---
