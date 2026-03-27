@@ -69,18 +69,60 @@ with st.sidebar:
 # 4. SECCIONES
 # ==========================================
 
+# ==========================================
+# 1. INVENTARIO (V.3.1 - ESTADO Y DISPONIBILIDAD)
+# ==========================================
 if menu == "🏠 Inventario":
-    st.header("Inventario de Unidades")
-    query = """
-        SELECT b.nombre as Inmueble, b.direccion as Dirección, i.tipo as Unidad, i.precio_alquiler,
-        CASE WHEN c.activo = 1 THEN '🔴 OCUPADO' ELSE '🟢 LIBRE' END as Estado
-        FROM inmuebles i JOIN bloques b ON i.id_bloque = b.id
+    st.header("Disponibilidad y Valores de Unidades")
+    
+    # Query optimizada: quitamos dirección y sumamos contrato/depósito
+    query_inv = """
+        SELECT 
+            b.nombre as Inmueble, 
+            i.tipo as Unidad, 
+            i.precio_alquiler as Alquiler,
+            i.costo_contrato as Contrato,
+            i.deposito_base as [Depósito Sug.],
+            CASE 
+                WHEN c.activo = 1 THEN '🔴 OCUPADO' 
+                ELSE '🟢 LIBRE' 
+            END as Estado,
+            CASE 
+                WHEN c.activo = 1 THEN c.fecha_fin 
+                ELSE 'DISPONIBLE HOY' 
+            END as [Disponible desde]
+        FROM inmuebles i 
+        JOIN bloques b ON i.id_bloque = b.id
         LEFT JOIN contratos c ON i.id = c.id_inmueble AND c.activo = 1
     """
-    df = db_query(query)
-    if df is not None:
-        df['precio_alquiler'] = df['precio_alquiler'].apply(f_m)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+    
+    df_inv = db_query(query_inv)
+    
+    if df_inv is not None and not df_inv.empty:
+        # Aplicamos formato de miles (punto) a las 3 columnas de dinero
+        cols_dinero = ['Alquiler', 'Contrato', 'Depósito Sug.']
+        for col in cols_dinero:
+            df_inv[col] = df_inv[col].apply(f_m)
+            
+        # Mostramos la tabla limpia y profesional
+        st.dataframe(
+            df_inv, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "Estado": st.column_config.TextColumn("Estado", help="Rojo: Ocupado | Verde: Disponible"),
+                "Disponible desde": st.column_config.TextColumn("📅 Disponibilidad")
+            }
+        )
+        
+        # Resumen rápido para el cliente
+        c1, c2 = st.columns(2)
+        libres = len(df_inv[df_inv['Estado'] == '🟢 LIBRE'])
+        c1.metric("Unidades Libres", libres)
+        c2.metric("Total Unidades", len(df_inv))
+        
+    else:
+        st.info("No hay unidades para mostrar. Cargue datos en la sección Maestros.")
 
 elif menu == "📝 Nuevo Contrato":
     st.header("Nuevo Contrato")
