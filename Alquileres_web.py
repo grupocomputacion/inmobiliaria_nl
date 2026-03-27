@@ -202,7 +202,7 @@ with st.sidebar:
 # ==========================================
 # 1. INVENTARIO (V.6.9 - ESTRUCTURA CORREGIDA)
 # ==========================================
-elif menu == "🏠 Inventario":
+if menu == "🏠 Inventario":
     st.header("Estado de Unidades y Disponibilidad")
     
     try:
