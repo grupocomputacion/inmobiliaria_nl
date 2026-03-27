@@ -200,9 +200,6 @@ with st.sidebar:
 # ==========================================
 
 # ==========================================
-# 1. INVENTARIO (V.5.5 - SEGURO Y DINÁMICO)
-# ==========================================
-# ==========================================
 # 1. INVENTARIO (V.6.9 - ESTRUCTURA CORREGIDA)
 # ==========================================
 elif menu == "🏠 Inventario":
@@ -259,7 +256,7 @@ elif menu == "🏠 Inventario":
     else:
         st.info("No hay unidades cargadas en el sistema. Vaya a 'Maestros' para iniciar.")
 
-
+        
 # ==========================================
 # 2. NUEVO CONTRATO + PDF (V.5.2 - CORREGIDO)
 # ==========================================
