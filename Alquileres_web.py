@@ -202,45 +202,63 @@ with st.sidebar:
 # ==========================================
 # 1. INVENTARIO (V.5.5 - SEGURO Y DINÁMICO)
 # ==========================================
-if menu == "🏠 Inventario":
+# ==========================================
+# 1. INVENTARIO (V.6.9 - ESTRUCTURA CORREGIDA)
+# ==========================================
+elif menu == "🏠 Inventario":
     st.header("Estado de Unidades y Disponibilidad")
     
-    # Intentamos una consulta robusta. Si falla por columnas nuevas, usamos la básica.
     try:
+        # Consulta completa con Disponibilidad
+        query_inv = """
+            SELECT 
+                b.nombre as Inmueble, 
+                i.tipo as Unidad, 
+                i.precio_alquiler as Alquiler, 
+                i.costo_contrato as Contrato, 
+                i.deposito_base as Deposito,
+                CASE WHEN c.activo = 1 THEN '🔴 OCUPADO' ELSE '🟢 LIBRE' END as Estado,
+                CASE 
+                    WHEN c.activo = 1 THEN c.fecha_fin 
+                    ELSE 'DISPONIBLE HOY' 
+                END as [Disponible Desde]
+            FROM inmuebles i 
+            JOIN bloques b ON i.id_bloque = b.id
+            LEFT JOIN contratos c ON i.id = c.id_inmueble AND c.activo = 1
+        """
+        df = db_query(query_inv)
+    except Exception as e:
+        # Si falla (por falta de columnas), hacemos una consulta básica de emergencia
+        query_basica = """
+            SELECT b.nombre as Inmueble, i.tipo as Unidad, i.precio_alquiler as Alquiler
+            FROM inmuebles i JOIN bloques b ON i.id_bloque = b.id
+        """
+        df = db_query(query_basica)
+        st.warning("Nota: Algunas columnas de disponibilidad no están listas. Resetee la base si es necesario.")
 
-        # Bloque para la sección de Inventario
-        df = db_query("""
-           SELECT 
-              b.nombre as Inmueble, 
-              i.tipo as Unidad, 
-              i.precio_alquiler as Alquiler, 
-              i.costo_contrato as Contrato, 
-              i.deposito_base as Deposito,
-              CASE WHEN c.activo = 1 THEN '🔴 OCUPADO' ELSE '🟢 LIBRE' END as Estado,
-              CASE WHEN c.activo = 1 THEN c.fecha_fin ELSE 'DISPONIBLE HOY' END as [Disponible Desde]
-           FROM inmuebles i 
-           JOIN bloques b ON i.id_bloque = b.id
-           LEFT JOIN contratos c ON i.id = c.id_inmueble AND c.activo = 1
-        """)
+    # AHORA SÍ: Validamos si hay datos después del bloque try/except
     if df is not None and not df.empty:
-        # Métricas de control arriba
         c1, c2 = st.columns(2)
         total_u = len(df)
-        # Contamos libres si la columna Estado existe y tiene el emoji verde
-        libres_count = len(df[df['Estado'].str.contains('LIBRE', na=False)])
         
+        # Conteo de libres (manejo de error si la columna no existe)
+        if 'Estado' in df.columns:
+            libres_count = len(df[df['Estado'].str.contains('LIBRE', na=False)])
+        else:
+            libres_count = 0
+            
         c1.metric("Unidades Libres", libres_count)
         c2.metric("Total Unidades", total_u)
         
-        # Formato de miles para que el cliente vea $ 390.000
+        # Formateo de moneda a las columnas que existan
         for col in ['Alquiler', 'Contrato', 'Deposito']:
             if col in df.columns:
                 df[col] = df[col].apply(f_m)
         
-        # Mostramos la tabla ocupando todo el ancho
         st.dataframe(df, use_container_width=True, hide_index=True)
     else:
-        st.warning("⚠️ No hay unidades cargadas. Por favor, cargue Inmuebles y Unidades en la sección 'Maestros'.")
+        st.info("No hay unidades cargadas en el sistema. Vaya a 'Maestros' para iniciar.")
+
 
 # ==========================================
 # 2. NUEVO CONTRATO + PDF (V.5.2 - CORREGIDO)
