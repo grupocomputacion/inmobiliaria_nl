@@ -134,19 +134,60 @@ with st.sidebar:
 # 5. SECCIONES
 # ==========================================
 
+# ==========================================
+# 1. INVENTARIO (V.5.5 - SEGURO Y DINÁMICO)
+# ==========================================
 if menu == "🏠 Inventario":
-    st.header("Inventario y Disponibilidad")
-    df = db_query("""SELECT b.nombre as Inmueble, i.tipo as Unidad, i.precio_alquiler as Alquiler, 
-                     i.costo_contrato as Contrato, i.deposito_base as Deposito,
-                     CASE WHEN c.activo = 1 THEN '🔴 OCUPADO' ELSE '🟢 LIBRE' END as Estado
-                     FROM inmuebles i JOIN bloques b ON i.id_bloque = b.id
-                     LEFT JOIN contratos c ON i.id = c.id_inmueble AND c.activo = 1""")
+    st.header("Estado de Unidades y Disponibilidad")
+    
+    # Intentamos una consulta robusta. Si falla por columnas nuevas, usamos la básica.
+    try:
+        query_inv = """
+            SELECT 
+                b.nombre as Inmueble, 
+                i.tipo as Unidad, 
+                i.precio_alquiler as Alquiler, 
+                i.costo_contrato as Contrato, 
+                i.deposito_base as Deposito,
+                CASE WHEN c.activo = 1 THEN '🔴 OCUPADO' ELSE '🟢 LIBRE' END as Estado,
+                CASE 
+                    WHEN c.activo = 1 THEN c.fecha_fin 
+                    ELSE 'DISPONIBLE HOY' 
+                END as [Disponible Desde]
+            FROM inmuebles i 
+            JOIN bloques b ON i.id_bloque = b.id
+            LEFT JOIN contratos c ON i.id = c.id_inmueble AND c.activo = 1
+        """
+        df = db_query(query_inv)
+    except:
+        # Si la base de datos es vieja y no tiene fecha_fin, mostramos lo básico para no romper nada
+        query_inv = """
+            SELECT b.nombre as Inmueble, i.tipo as Unidad, i.precio_alquiler as Alquiler, 
+            i.costo_contrato as Contrato, i.deposito_base as Deposito,
+            'VERIFICAR' as Estado, 'S/D' as [Disponible Desde]
+            FROM inmuebles i JOIN bloques b ON i.id_bloque = b.id
+        """
+        df = db_query(query_inv)
+
     if df is not None and not df.empty:
+        # Métricas de control arriba
         c1, c2 = st.columns(2)
-        c1.metric("Unidades Libres", len(df[df['Estado'] == '🟢 LIBRE']))
-        c2.metric("Total Unidades", len(df))
-        for col in ['Alquiler', 'Contrato', 'Deposito']: df[col] = df[col].apply(f_m)
+        total_u = len(df)
+        # Contamos libres si la columna Estado existe y tiene el emoji verde
+        libres_count = len(df[df['Estado'].str.contains('LIBRE', na=False)])
+        
+        c1.metric("Unidades Libres", libres_count)
+        c2.metric("Total Unidades", total_u)
+        
+        # Formato de miles para que el cliente vea $ 390.000
+        for col in ['Alquiler', 'Contrato', 'Deposito']:
+            if col in df.columns:
+                df[col] = df[col].apply(f_m)
+        
+        # Mostramos la tabla ocupando todo el ancho
         st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.warning("⚠️ No hay unidades cargadas. Por favor, cargue Inmuebles y Unidades en la sección 'Maestros'.")
 
 # ==========================================
 # 2. NUEVO CONTRATO + PDF (V.5.2 - CORREGIDO)
