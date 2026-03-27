@@ -135,29 +135,118 @@ elif menu == "💰 Cobranzas":
                     if esta_pagado: st.success("Cuota cancelada totalmente.")
                     else: st.warning("Pago parcial registrado.")
 
+# ==========================================
+# 6. MAESTROS (V.2.9 - ABM TOTAL + GEN. MASIVA)
+# ==========================================
 elif menu == "⚙️ Maestros":
-    st.header("Administración")
+    st.header("Administración y Configuración del Sistema")
     t1, t2, t3, t4 = st.tabs(["🏢 Inmuebles", "🏠 Unidades", "👤 Inquilinos", "📋 Contratos"])
     
+    # --- PESTAÑA 1: INMUEBLES (Edificios/Complejos) ---
     with t1:
-        with st.form("f_inm"):
-            n = st.text_input("Nombre (Ej: Edificio Central)"); d = st.text_input("Dirección"); b = st.text_input("Barrio"); l = st.text_input("Localidad")
-            if st.form_submit_button("Guardar Inmueble"):
-                db_query("INSERT INTO bloques (nombre, direccion, barrio, localidad) VALUES (?,?,?,?)", (n, d, b, l), commit=True); st.rerun()
-        st.dataframe(db_query("SELECT * FROM bloques"), use_container_width=True)
+        st.subheader("Gestión de Inmuebles")
+        with st.expander("➕ Alta de Inmueble"):
+            with st.form("f_inm_alta", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                n = c1.text_input("Nombre (Ej: Edificio Central)")
+                d = c1.text_input("Dirección")
+                b = c2.text_input("Barrio")
+                l = c2.text_input("Localidad")
+                if st.form_submit_button("Guardar"):
+                    db_query("INSERT INTO bloques (nombre, direccion, barrio, localidad) VALUES (?,?,?,?)", (n, d, b, l), commit=True); st.rerun()
+        
+        df_inm = db_query("SELECT * FROM bloques")
+        if not df_inm.empty:
+            st.dataframe(df_inm, use_container_width=True, hide_index=True)
+            sel_inm = st.selectbox("Seleccione Inmueble para EDITAR o BORRAR", df_inm['nombre'].tolist())
+            dat_inm = df_inm[df_inm['nombre'] == sel_inm].iloc[0]
+            with st.form("f_inm_edit"):
+                en = st.text_input("Nombre", dat_inm['nombre'])
+                ed = st.text_input("Dirección", dat_inm['direccion'])
+                eb = st.text_input("Barrio", dat_inm['barrio'])
+                el = st.text_input("Localidad", dat_inm['localidad'])
+                c_in1, c_in2 = st.columns(2)
+                if c_in1.form_submit_button("💾 Guardar Cambios"):
+                    db_query("UPDATE bloques SET nombre=?, direccion=?, barrio=?, localidad=? WHERE id=?", (en, ed, eb, el, dat_inm['id']), commit=True); st.rerun()
+                if c_in2.form_submit_button("🗑️ ELIMINAR INMUEBLE"):
+                    db_query(f"DELETE FROM bloques WHERE id={dat_inm['id']}", commit=True); st.rerun()
 
+    # --- PESTAÑA 2: UNIDADES ---
+    with t2:
+        st.subheader("Gestión de Unidades")
+        bls = db_query("SELECT id, nombre FROM bloques")
+        if not bls.empty:
+            with st.expander("➕ Alta de Unidad"):
+                with st.form("f_u_alta", clear_on_submit=True):
+                    bid = st.selectbox("Inmueble", bls['id'], format_func=lambda x: bls[bls['id']==x]['nombre'].values[0])
+                    desc = st.text_input("Descripción (Ej: Piso 1 Dpto A)")
+                    p1 = st.text_input("Alquiler Sug."); p2 = st.text_input("Contrato Sug."); p3 = st.text_input("Depósito Sug.")
+                    if st.form_submit_button("Crear Unidad"):
+                        db_query("INSERT INTO inmuebles (id_bloque, tipo, precio_alquiler, costo_contrato, deposito_base) VALUES (?,?,?,?,?)", (bid, desc, cl(p1), cl(p2), cl(p3)), commit=True); st.rerun()
+            
+            df_uni = db_query("SELECT i.id, b.nombre as Inmueble, i.tipo as Unidad, i.precio_alquiler FROM inmuebles i JOIN bloques b ON i.id_bloque=b.id")
+            if not df_uni.empty:
+                st.dataframe(df_uni, use_container_width=True, hide_index=True)
+                sel_u = st.selectbox("Seleccione Unidad para EDITAR o BORRAR", df_uni['Unidad'].tolist())
+                u_curr = db_query(f"SELECT * FROM inmuebles WHERE tipo='{sel_u}'").iloc[0]
+                with st.form("f_u_edit"):
+                    u_desc = st.text_input("Nueva Descripción", u_curr['tipo'])
+                    u_alq = st.text_input("Alquiler", f_m(u_curr['precio_alquiler']))
+                    if st.form_submit_button("💾 Actualizar"):
+                        db_query("UPDATE inmuebles SET tipo=?, precio_alquiler=? WHERE id=?", (u_desc, cl(u_alq), u_curr['id']), commit=True); st.rerun()
+                    if st.form_submit_button("🗑️ Eliminar"):
+                        db_query(f"DELETE FROM inmuebles WHERE id={u_curr['id']}", commit=True); st.rerun()
+
+    # --- PESTAÑA 3: INQUILINOS ---
+    with t3:
+        st.subheader("Gestión de Inquilinos")
+        with st.expander("➕ Alta de Inquilino"):
+            with st.form("f_i_alta", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                in_n = c1.text_input("Nombre"); in_d = c1.text_input("DNI/CUIT"); in_c = c1.text_input("Celular")
+                in_p = c2.text_input("Procedencia"); in_g = c2.text_input("Grupo"); in_e = c2.text_input("Emergencia")
+                if st.form_submit_button("Guardar Inquilino"):
+                    db_query("INSERT INTO inquilinos (nombre, dni, celular, procedencia, grupo, emergencia) VALUES (?,?,?,?,?,?)", (in_n, in_d, in_c, in_p, in_g, in_e), commit=True); st.rerun()
+        
+        df_inq = db_query("SELECT * FROM inquilinos")
+        if not df_inq.empty:
+            st.dataframe(df_inq, use_container_width=True, hide_index=True)
+            sel_i = st.selectbox("Seleccione Inquilino para EDITAR/BORRAR", df_inq['nombre'].tolist())
+            i_dat = df_inq[df_inq['nombre'] == sel_i].iloc[0]
+            with st.form("f_i_edit"):
+                en_n = st.text_input("Nombre", i_dat['nombre']); en_d = st.text_input("DNI", i_dat['dni'])
+                en_c = st.text_input("Celular", i_dat['celular']); en_e = st.text_input("Emergencia", i_dat['emergencia'])
+                if st.form_submit_button("💾 Actualizar Datos"):
+                    db_query("UPDATE inquilinos SET nombre=?, dni=?, celular=?, emergencia=? WHERE id=?", (en_n, en_d, en_c, en_e, i_dat['id']), commit=True); st.rerun()
+                if st.form_submit_button("🗑️ Borrar Inquilino"):
+                    db_query(f"DELETE FROM inquilinos WHERE id={i_dat['id']}", commit=True); st.rerun()
+
+    # --- PESTAÑA 4: CONTRATOS Y GENERACIÓN MASIVA ---
     with t4:
-        st.subheader("Generación de Alquiler Mensual")
-        c_activos = db_query("""
-            SELECT c.id, inq.nombre, b.nombre as edif, i.tipo, c.monto_alquiler 
-            FROM contratos c JOIN inquilinos inq ON c.id_inquilino=inq.id 
-            JOIN inmuebles i ON c.id_inmueble=i.id JOIN bloques b ON i.id_bloque=b.id WHERE c.activo=1
+        st.subheader("Gestión de Contratos y Generación de Deuda")
+        df_cont = db_query("""
+            SELECT c.id, b.nombre as Inmueble, i.tipo as Unidad, inq.nombre as Inquilino, c.monto_alquiler 
+            FROM contratos c JOIN inmuebles i ON c.id_inmueble=i.id 
+            JOIN bloques b ON i.id_bloque=b.id JOIN inquilinos inq ON c.id_inquilino=inq.id WHERE c.activo=1
         """)
-        if not c_activos.empty:
-            st.dataframe(c_activos)
-            c_sel = st.selectbox("Seleccione contrato para generar Próximo Mes", c_activos['id'])
-            mes_nombre = st.text_input("Concepto (Ej: Alquiler Marzo 2026)", "Alquiler")
-            if st.button("⚡ GENERAR DEUDA"):
-                monto_alq = c_activos[c_activos['id']==c_sel]['monto_alquiler'].values[0]
-                db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe) VALUES (?, ?, ?)", (c_sel, mes_nombre, monto_alq), commit=True)
-                st.success("Deuda generada en Cobranzas.")
+        
+        if not df_cont.empty:
+            st.dataframe(df_cont, use_container_width=True, hide_index=True)
+            
+            st.write("---")
+            st.subheader("⚡ Generar Deuda de Alquiler")
+            col_g1, col_g2 = st.columns(2)
+            mes_txt = col_g1.text_input("Concepto", f"Alquiler {datetime.now().strftime('%B %Y')}")
+            filtro_inm = col_g2.selectbox("Filtrar por Inmueble (Opcional)", ["TODOS"] + df_cont['Inmueble'].unique().tolist())
+            
+            if st.button("🚀 GENERAR DEUDA MASIVA (SEGÚN FILTRO)"):
+                df_procesar = df_cont if filtro_inm == "TODOS" else df_cont[df_cont['Inmueble'] == filtro_inm]
+                for _, row in df_procesar.iterrows():
+                    db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe) VALUES (?, ?, ?)", (row['id'], mes_txt, row['monto_alquiler']), commit=True)
+                st.success(f"Se generaron {len(df_procesar)} deudas de alquiler exitosamente.")
+            
+            st.write("---")
+            st.subheader("Acciones de Contrato")
+            c_id_sel = st.selectbox("Seleccione ID de Contrato para eliminar", df_cont['id'].tolist())
+            if st.button("🚨 ANULAR CONTRATO SELECCIONADO"):
+                db_query(f"DELETE FROM contratos WHERE id={c_id_sel}", commit=True); st.rerun()
