@@ -345,14 +345,15 @@ elif menu == "⚙️ Maestros":
     st.header("Administración de Base de Datos")
     
     # Definimos las 5 pestañas: las 4 de gestión + la de respaldo
-    t1, t2, t3, t4, t5 = st.tabs([
-        "🏢 Inmuebles", 
-        "🏠 Unidades", 
-        "👤 Inquilinos", 
-        "📋 Contratos", 
-        "💾 Respaldo y Recuperación"
-    ])
 
+    t1, t2, t3, t4, t5, t6 = st.tabs([
+        "🏢 Inmuebles",
+        "🏠 Unidades",
+        "👤 Inquilinos", 
+        "📋 Contratos",
+        "💾 Backup",
+        "📋 Listado de Alquilados"
+    ])
     # --- 1. INMUEBLES ---
     with t1:
         st.subheader("Edificios y Complejos")
@@ -508,6 +509,47 @@ elif menu == "⚙️ Maestros":
                                 dfs[sheet].to_sql(tabla, conn, if_exists='append', index=False)
                     st.success("✅ Datos restaurados."); st.rerun()
                 except Exception as e: st.error(f"Error: {e}")
+
+# --- 6. LISTADO DE ALQUILADOS (NUEVA CONSULTA) ---
+    with t6:
+        st.subheader("Unidades Alquiladas y Contacto")
+        
+        query_alquilados = """
+            SELECT 
+                b.nombre as Inmueble, 
+                i.tipo as Unidad, 
+                inq.nombre as Inquilino, 
+                inq.celular as [WhatsApp/Cel],
+                IFNULL((SELECT SUM(monto_debe - monto_pago) FROM deudas WHERE id_contrato = c.id AND pagado = 0), 0) as Saldo_Pendiente
+            FROM contratos c
+            JOIN inmuebles i ON c.id_inmueble = i.id
+            JOIN bloques b ON i.id_bloque = b.id
+            JOIN inquilinos inq ON c.id_inquilino = inq.id
+            WHERE c.activo = 1
+        """
+        
+        df_alq = db_query(query_alquilados)
+        
+        if df_alq is not None and not df_alq.empty:
+            # Aplicamos formato visual al saldo para que sea fácil de leer
+            df_display = df_alq.copy()
+            df_display['Saldo_Pendiente'] = df_display['Saldo_Pendiente'].apply(lambda x: f"🔴 $ {f_m(x)}" if x > 0 else "🟢 Al día")
+            
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
+            
+            # Botón para descargar este listado específico a Excel si lo necesita
+            output_list = io.BytesIO()
+            with pd.ExcelWriter(output_list, engine='xlsxwriter') as writer:
+                df_alq.to_excel(writer, sheet_name='Alquilados', index=False)
+            
+            st.download_button(
+                label="📥 Exportar Listado a Excel",
+                data=output_list.getvalue(),
+                file_name=f"Alquilados_Contacto_{date.today()}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.info("No hay unidades con contratos activos en este momento.")                
 
 # ==========================================
 # 1. INVENTARIO (V.6.8 - VISTA LIMPIA)
