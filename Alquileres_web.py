@@ -16,6 +16,25 @@ st.markdown("""
     <style>
     .stButton>button { background-color: #D4AF37; color: black; font-weight: bold; width: 100%; border-radius: 5px; }
     h1, h2, h3, h4 { color: #D4AF37; }
+import streamlit as st
+import sqlite3
+import pandas as pd
+from datetime import datetime, date, timedelta
+import os
+import io
+from fpdf import FPDF
+
+# ==========================================
+# 1. IDENTIDAD Y CONFIGURACIÓN (V.4.3)
+# ==========================================
+st.set_page_config(page_title="NL INMOBILIARIA - V.4.3", layout="wide")
+st.cache_data.clear()
+
+# Estilo NL
+st.markdown("""
+    <style>
+    .stButton>button { background-color: #D4AF37; color: black; font-weight: bold; width: 100%; border-radius: 5px; }
+    h1, h2, h3, h4 { color: #D4AF37; }
     [data-testid="stSidebar"] { background-color: #111; border-right: 1px solid #D4AF37; }
     </style>
     """, unsafe_allow_html=True)
@@ -33,40 +52,34 @@ def db_query(sql, params=(), commit=False):
                 return cur.lastrowid
             return pd.read_sql_query(sql, conn, params=params)
     except Exception as e:
-        st.error(f"Error de base de datos: {e}")
         return None
 
-# Funciones de formato
 def cl(t): return int(str(t).replace('$', '').replace('.', '').replace(',', '').strip() or 0)
 def f_m(v): return f"{int(v or 0):,}".replace(",", ".")
 
 # ==========================================
-# 3. GENERADOR DE PDF PROFESIONAL
+# 3. GENERADOR DE PDF (TEXTO ORIGINAL ÍNTEGRO)
 # ==========================================
-def generar_pdf_contrato(datos_u, datos_i, f_inicio, m_alq, m_dep, m_con):
-    class PDF(FPDF):
-        def header(self):
-            if os.path.exists("alquileres.jpg"):
-                self.image("alquileres.jpg", 10, 8, 33)
-            self.set_font('Arial', 'B', 15)
-            self.cell(80)
-            self.cell(30, 10, 'CONTRATO DE LOCACIÓN TEMPORARIA', 0, 0, 'C')
-            self.ln(20)
-
-    # Configuración del PDF
-    pdf = PDF()
+def generar_pdf_contrato_fiel(datos_u, datos_i, f_inicio, m_alq, m_dep, m_con):
+    pdf = FPDF()
     pdf.add_page()
-    pdf.set_font('Arial', '', 11)
     
-    # Fechas y Nombres de Meses
+    # Logo
+    if os.path.exists("alquileres.jpg"):
+        pdf.image("alquileres.jpg", 10, 8, 30)
+    
+    pdf.set_font('Arial', 'B', 12)
+    pdf.cell(0, 10, 'CONTRATO DE LOCACIÓN TEMPORARIA (3 MESES)', 0, 1, 'C')
+    pdf.ln(5)
+    
+    pdf.set_font('Arial', '', 10)
     hoy = date.today()
-    meses_nom = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "deziembre"]
-    f_vence = f_inicio + timedelta(days=90) # 3 meses aprox
+    meses_nom = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+    
+    # TEXTO ORIGINAL SOLICITADO
+    texto_legal = f"""Entre NL PROPIEDADES, CUIT 30-71884850-0 con domicilio en Av. Vélez Sarsfield 745, B° Nueva Córdoba, Córdoba Capital, en adelante “EL LOCADOR” y por la otra parte {datos_i['nombre'].upper()}, DNI {datos_i['dni']}, con domicilio en {datos_i['procedencia'] or 'S/D'}, en adelante “EL LOCATARIO”, se celebra el presente contrato sujeto a las siguientes cláusulas:
 
-    # TEXTO LEGAL CON REEMPLAZO DINÁMICO (Mapeado de tus puntos 2.a a 2.h)
-    texto = f"""Entre NL PROPIEDADES, CUIT 30-71884850-0 con domicilio en Av. Vélez Sarsfield 745, B° Nueva Córdoba, Córdoba Capital, en adelante “EL LOCADOR” y por la otra parte {datos_i['nombre'].upper()}, DNI {datos_i['dni']}, con domicilio en {datos_i['procedencia']}, en adelante “EL LOCATARIO”, se celebra el presente contrato sujeto a las siguientes cláusulas:
-
-1) OBJETO: Se alquila el inmueble ubicado en {datos_u['direccion']}, {datos_u['barrio']}, {datos_u['localidad']}, destinado a uso vivienda / comercial. Unidad: {datos_u['tipo']}.
+1) OBJETO: Se alquila el inmueble ubicado en {datos_u['direccion'] or 'S/D'}, destinado a uso vivienda / comercial. Unidad: {datos_u['tipo']}.
 
 2) PLAZO: El contrato tendrá una duración de TRES (3) MESES, iniciando el día {f_inicio.strftime('%d/%m/%Y')}.
 
@@ -85,109 +98,98 @@ def generar_pdf_contrato(datos_u, datos_i, f_inicio, m_alq, m_dep, m_con):
 El locatario declara recibir el inmueble en buen estado y se compromete a devolverlo en iguales condiciones.
 
 En prueba de conformidad, se firman dos ejemplares de un mismo tenor en la ciudad de Córdoba, a los {hoy.day} días del mes de {meses_nom[hoy.month-1]} del año {hoy.year}.
-"""
-    # Escribimos el texto legal
-    pdf.multi_cell(0, 7, texto)
-    pdf.ln(15)
-
-    # SECCIÓN DE FIRMAS (Punto 2 y Firmante Inmobiliaria)
-    pdf.set_font('Arial', 'B', 11)
+""
+    pdf.multi_cell(0, 6, texto_legal)
+    pdf.ln(10)
     
-    # Líneas de firma
-    pdf.cell(90, 10, '_______________________________', 0, 0, 'L')
-    pdf.cell(90, 10, '_______________________________', 0, 1, 'R')
+    # Bloque de Firmas
+    y_firmas = pdf.get_y()
+    pdf.set_font('Arial', 'B', 10)
+    pdf.cell(90, 5, 'LA LOCADORA - NL PROPIEDADES', 0, 0, 'L')
+    pdf.cell(90, 5, 'EL LOCATARIO', 0, 1, 'R')
     
-    # Títulos
-    pdf.cell(90, 7, 'LA LOCADORA - NL PROPIEDADES', 0, 0, 'L')
-    pdf.cell(90, 7, 'EL LOCATARIO', 0, 1, 'R')
+    pdf.set_font('Arial', '', 9)
+    pdf.cell(90, 8, 'Firma: __________________________', 0, 0, 'L')
+    pdf.cell(90, 8, 'Firma: __________________________', 0, 1, 'R')
     
-    pdf.set_font('Arial', '', 10)
+    pdf.cell(90, 8, 'Aclaración: NL PROPIEDADES', 0, 0, 'L')
+    pdf.cell(90, 8, f"Aclaración: {datos_i['nombre']}", 0, 1, 'R')
     
-    # Datos de los firmantes
-    pdf.cell(90, 5, 'Firma: __________________________', 0, 0, 'L')
-    pdf.cell(90, 5, f"Firma: __________________________", 0, 1, 'R')
+    pdf.cell(90, 8, 'DNI/CUIT: 30-71884850-0', 0, 0, 'L')
+    pdf.cell(90, 8, f"DNI: {datos_i['dni']}", 0, 1, 'R')
     
-    pdf.cell(90, 5, 'Aclaración: NL PROPIEDADES', 0, 0, 'L')
-    pdf.cell(90, 5, f"Aclaración: {datos_i['nombre']}", 0, 1, 'R')
-    
-    pdf.cell(90, 5, 'DNI/CUIT: 30-71884850-0', 0, 0, 'L')
-    pdf.cell(90, 5, f"DNI: {datos_i['dni']}", 0, 1, 'R')
-
-    # Retornamos el PDF como binario
     return pdf.output(dest='S').encode('latin-1')
 
 # ==========================================
-# 4. BARRA LATERAL (MENÚ)
+# 4. BARRA LATERAL (CON RESET)
 # ==========================================
 with st.sidebar:
     if os.path.exists("alquileres.jpg"): st.image("alquileres.jpg", use_container_width=True)
-    st.info("🚀 V.4.1 - PDF NATIVO")
+    st.info("🚀 V.4.3 - CONTRATO ORIGINAL")
     menu = st.radio("MENÚ:", ["🏠 Inventario", "📝 Nuevo Contrato", "💰 Cobranzas", "📊 Caja", "⚙️ Maestros"])
+    st.write("---")
+    if st.button("🚨 RESET TOTAL DE BASE"):
+        if os.path.exists('datos_alquileres.db'):
+            os.remove('datos_alquileres.db')
+            st.rerun()
 
 # ==========================================
 # 5. LÓGICA DE SECCIONES
 # ==========================================
 
-# --- 1. INVENTARIO (Simplificado para debug) ---
-if menu == "🏠 Inventario": st.header("Inventario de Unidades"); st.write(db_query("SELECT i.id, b.nombre, i.tipo, i.precio_alquiler FROM inmuebles i JOIN bloques b ON i.id_bloque = b.id"))
+# --- 1. INVENTARIO (RECUPERADO COMPLETO) ---
+if menu == "🏠 Inventario":
+    st.header("Inventario de Unidades")
+    query_inv = """
+        SELECT b.nombre as Inmueble, i.tipo as Unidad, i.precio_alquiler as Alquiler, 
+               i.costo_contrato as Contrato, i.deposito_base as Deposito,
+               CASE WHEN c.activo = 1 THEN '🔴 OCUPADO' ELSE '🟢 LIBRE' END as Estado
+        FROM inmuebles i JOIN bloques b ON i.id_bloque = b.id
+        LEFT JOIN contratos c ON i.id = c.id_inmueble AND c.activo = 1
+    """
+    df = db_query(query_inv)
+    if df is not None and not df.empty:
+        c1, c2 = st.columns(2)
+        c1.metric("Unidades Libres", len(df[df['Estado'] == '🟢 LIBRE']))
+        c2.metric("Total Unidades", len(df))
+        
+        df['Alquiler'] = df['Alquiler'].apply(f_m)
+        df['Contrato'] = df['Contrato'].apply(f_m)
+        df['Deposito'] = df['Deposito'].apply(f_m)
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
-# --- 2. NUEVO CONTRATO (FULL AUTOMÁTICO + PDF) ---
+# --- 2. NUEVO CONTRATO (CON PDF ORIGINAL) ---
 elif menu == "📝 Nuevo Contrato":
-    st.header("Formalización de Contrato Legal")
-    
-    u_df = db_query("SELECT i.id, b.nombre || ' - ' || i.tipo as ref, b.direccion, b.barrio, b.localidad, i.tipo, i.precio_alquiler, i.costo_contrato, i.deposito_base FROM inmuebles i JOIN bloques b ON i.id_bloque=b.id")
+    st.header("Alta de Contrato y PDF")
+    u_df = db_query("SELECT i.id, b.nombre || ' - ' || i.tipo as ref, b.direccion, b.barrio, i.tipo, i.precio_alquiler, i.costo_contrato, i.deposito_base FROM inmuebles i JOIN bloques b ON i.id_bloque=b.id")
     i_df = db_query("SELECT * FROM inquilinos")
     
-    if u_df is not None and i_df is not None and not u_df.empty and not i_df.empty:
-        # Usamos Session State para persistir el PDF generado
-        if 'pdf_blob' not in st.session_state: st.session_state['pdf_blob'] = None
-        if 'p_cid' not in st.session_state: st.session_state['p_cid'] = None
-
-        with st.form("f_contrato_legal_full"):
+    if u_df is not None and i_df is not None and not u_df.empty:
+        with st.form("f_contrato_final"):
             u_id = st.selectbox("Unidad", u_df['id'], format_func=lambda x: u_df[u_df['id']==x]['ref'].values[0])
             i_id = st.selectbox("Inquilino", i_df['id'], format_func=lambda x: i_df[i_df['id']==x]['nombre'].values[0])
-            f_ini = st.date_input("Inicio Contrato", date.today())
+            f_ini = st.date_input("Fecha Inicio", date.today())
             
             u_sel = u_df[u_df['id'] == u_id].iloc[0]
-            m_alq = st.text_input("Alquiler Mensual", value=f_m(u_sel['precio_alquiler']))
-            m_dep = st.text_input("Monto Depósito / Garantía", value=f_m(u_sel['deposito_base']))
-            m_con = st.text_input("Gastos Administrativos", value=f_m(u_sel['costo_contrato']))
+            m_a = st.text_input("Alquiler Mensual", f_m(u_sel['precio_alquiler']))
+            m_d = st.text_input("Depósito Garantía", f_m(u_sel['deposito_base']))
+            m_c = st.text_input("Gasto Administrativo", f_m(u_sel['costo_contrato']))
             
-            st.warning("⚠️ Se generarán 3 deudas: Mes 1, Depósito y Gasto Contrato.")
-            btn_generar = st.form_submit_button("📝 GENERAR CONTRATO LEGAL (PDF)")
-            
-            if btn_generar:
-                # 1. Guardar Contrato y Generar las 3 Deudas (Punto 1 Solucionado)
-                f_vence = f_ini + timedelta(days=90) # 3 meses aprox
-                cid = db_query("INSERT INTO contratos (id_inmueble, id_inquilino, fecha_inicio, fecha_fin, monto_alquiler) VALUES (?,?,?,?,?)", 
-                               (u_id, i_id, f_ini, f_vence, cl(m_alq)), commit=True)
+            if st.form_submit_button("GRABAR Y GENERAR PDF"):
+                # Guardar en DB y generar las 3 deudas
+                cid = db_query("INSERT INTO contratos (id_inmueble, id_inquilino, fecha_inicio, monto_alquiler) VALUES (?,?,?,?)", (u_id, i_id, f_ini, cl(m_a)), commit=True)
+                db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe) VALUES (?, 'Mes 1', ?)", (cid, cl(m_a)), commit=True)
+                db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe) VALUES (?, 'Garantía/Depósito', ?)", (cid, cl(m_d)), commit=True)
+                db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe) VALUES (?, 'Gastos Administrativos', ?)", (cid, cl(m_c)), commit=True)
                 
-                db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe) VALUES (?, 'Mes 1 Alquiler', ?)", (cid, cl(m_alq)), commit=True)
-                db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe) VALUES (?, 'Depósito en Garantía', ?)", (cid, cl(m_dep)), commit=True)
-                db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe) VALUES (?, 'Gasto Contrato', ?)", (cid, cl(m_con)), commit=True)
-                
-                # 2. Generar el PDF binario (Punto 2 Solucionado)
-                inquilino_sel = i_df[i_df['id'] == i_id].iloc[0]
-                pdf_bin = generar_pdf_contrato(u_sel, inquilino_sel, f_ini, m_alq, m_dep, m_con)
-                
-                # Guardamos en Session State para que no se borre al hacer clic en descargar
-                st.session_state['pdf_blob'] = pdf_bin
-                st.session_state['p_cid'] = cid
-                st.success(f"Contrato {cid} cargado y PDF generado.")
+                # Generar PDF fiel al texto original
+                pdf_bytes = generar_pdf_contrato_fiel(u_sel, i_df[i_df['id']==i_id].iloc[0], f_ini, m_a, m_d, m_c)
+                st.session_state['pdf_ready'] = pdf_bytes
+                st.session_state['cid_last'] = cid
+                st.success(f"Contrato {cid} grabado exitosamente.")
 
-        # Botón de Descarga (aparece fuera del form si el PDF existe)
-        if st.session_state['pdf_blob'] is not None:
-            st.write("---")
-            st.subheader("🎉 ¡Contrato Listo!")
-            st.download_button(
-                label="📥 Descargar Contrato PDF Firmado",
-                data=st.session_state['pdf_blob'],
-                file_name=f"Contrato_NL_{st.session_state['p_cid']}.pdf",
-                mime="application/pdf"
-            )
-
-    else: st.error("Cargue datos en Maestros.")
-
+        if 'pdf_ready' in st.session_state:
+            st.download_button("📥 DESCARGAR CONTRATO PDF", st.session_state['pdf_ready'], f"Contrato_NL_{st.session_state['cid_last']}.pdf", "application/pdf")
     
 elif menu == "💰 Cobranzas":
     st.header("Cobranzas y Recibos")
