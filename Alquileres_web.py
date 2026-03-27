@@ -172,30 +172,66 @@ elif menu == "⚙️ Maestros":
                     db_query(f"DELETE FROM bloques WHERE id={dat_inm['id']}", commit=True); st.rerun()
 
     # --- PESTAÑA 2: UNIDADES ---
+# --- PESTAÑA 2: UNIDADES (V.3.0 - FULL EDIT) ---
     with t2:
-        st.subheader("Gestión de Unidades")
+        st.subheader("Gestión Integral de Unidades")
         bls = db_query("SELECT id, nombre FROM bloques")
+        
         if not bls.empty:
-            with st.expander("➕ Alta de Unidad"):
+            # --- ALTA DE UNIDAD ---
+            with st.expander("➕ Cargar Nueva Unidad"):
                 with st.form("f_u_alta", clear_on_submit=True):
                     bid = st.selectbox("Inmueble", bls['id'], format_func=lambda x: bls[bls['id']==x]['nombre'].values[0])
                     desc = st.text_input("Descripción (Ej: Piso 1 Dpto A)")
-                    p1 = st.text_input("Alquiler Sug."); p2 = st.text_input("Contrato Sug."); p3 = st.text_input("Depósito Sug.")
+                    c_a1, c_a2, c_a3 = st.columns(3)
+                    p1 = c_a1.text_input("Alquiler Sugerido")
+                    p2 = c_a2.text_input("Gasto Contrato Sug.")
+                    p3 = c_a3.text_input("Depósito Sugerido")
                     if st.form_submit_button("Crear Unidad"):
-                        db_query("INSERT INTO inmuebles (id_bloque, tipo, precio_alquiler, costo_contrato, deposito_base) VALUES (?,?,?,?,?)", (bid, desc, cl(p1), cl(p2), cl(p3)), commit=True); st.rerun()
+                        db_query("INSERT INTO inmuebles (id_bloque, tipo, precio_alquiler, costo_contrato, deposito_base) VALUES (?,?,?,?,?)", 
+                                 (bid, desc, cl(p1), cl(p2), cl(p3)), commit=True)
+                        st.success("Unidad creada correctamente."); st.rerun()
             
-            df_uni = db_query("SELECT i.id, b.nombre as Inmueble, i.tipo as Unidad, i.precio_alquiler FROM inmuebles i JOIN bloques b ON i.id_bloque=b.id")
+            # --- TABLA DE CONSULTA ---
+            df_uni = db_query("""
+                SELECT i.id, b.nombre as Inmueble, i.tipo as Unidad, 
+                       i.precio_alquiler as Alquiler, i.costo_contrato as Contrato, i.deposito_base as Deposito
+                FROM inmuebles i JOIN bloques b ON i.id_bloque=b.id
+            """)
+            
             if not df_uni.empty:
-                st.dataframe(df_uni, use_container_width=True, hide_index=True)
-                sel_u = st.selectbox("Seleccione Unidad para EDITAR o BORRAR", df_uni['Unidad'].tolist())
-                u_curr = db_query(f"SELECT * FROM inmuebles WHERE tipo='{sel_u}'").iloc[0]
+                # Formateamos los miles para la tabla
+                df_disp = df_uni.copy()
+                for col in ['Alquiler', 'Contrato', 'Deposito']:
+                    df_disp[col] = df_disp[col].apply(f_m)
+                
+                st.dataframe(df_disp, use_container_width=True, hide_index=True)
+                
+                st.write("---")
+                # --- EDICIÓN Y ELIMINACIÓN ---
+                st.subheader("📝 Editar o Eliminar Unidad")
+                sel_u_nom = st.selectbox("Seleccione Unidad para modificar", df_uni['Unidad'].tolist())
+                # Traemos los datos actuales de la base
+                u_curr = db_query(f"SELECT * FROM inmuebles WHERE tipo=?", (sel_u_nom,)).iloc[0]
+                
                 with st.form("f_u_edit"):
-                    u_desc = st.text_input("Nueva Descripción", u_curr['tipo'])
-                    u_alq = st.text_input("Alquiler", f_m(u_curr['precio_alquiler']))
-                    if st.form_submit_button("💾 Actualizar"):
-                        db_query("UPDATE inmuebles SET tipo=?, precio_alquiler=? WHERE id=?", (u_desc, cl(u_alq), u_curr['id']), commit=True); st.rerun()
-                    if st.form_submit_button("🗑️ Eliminar"):
-                        db_query(f"DELETE FROM inmuebles WHERE id={u_curr['id']}", commit=True); st.rerun()
+                    ed_desc = st.text_input("Descripción / Nombre", u_curr['tipo'])
+                    c_ed1, c_ed2, c_ed3 = st.columns(3)
+                    ed_alq = c_ed1.text_input("Alquiler Sugerido", value=f_m(u_curr['precio_alquiler']))
+                    ed_con = c_ed2.text_input("Gasto Contrato", value=f_m(u_curr['costo_contrato']))
+                    ed_dep = c_ed3.text_input("Depósito", value=f_m(u_curr['deposito_base']))
+                    
+                    col_btn1, col_btn2 = st.columns(2)
+                    if col_btn1.form_submit_button("💾 GUARDAR CAMBIOS"):
+                        db_query("""UPDATE inmuebles SET tipo=?, precio_alquiler=?, costo_contrato=?, deposito_base=? 
+                                    WHERE id=?""", (ed_desc, cl(ed_alq), cl(ed_con), cl(ed_dep), u_curr['id']), commit=True)
+                        st.success("Unidad actualizada correctamente."); st.rerun()
+                    
+                    if col_btn2.form_submit_button("🗑️ ELIMINAR UNIDAD"):
+                        db_query(f"DELETE FROM inmuebles WHERE id={u_curr['id']}", commit=True)
+                        st.warning("Unidad eliminada."); st.rerun()
+        else:
+            st.warning("Debe cargar al menos un Inmueble antes de crear Unidades.")
 
     # --- PESTAÑA 3: INQUILINOS ---
     with t3:
