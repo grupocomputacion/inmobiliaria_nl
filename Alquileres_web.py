@@ -6,6 +6,39 @@ import os
 import io
 from fpdf import FPDF
 
+# --- FUNCIONES DE SOPORTE CRÍTICAS ---
+
+def cl(t): 
+    """ Limpia strings de moneda y los convierte a entero para la DB """
+    try:
+        if not t: return 0
+        return int(str(t).replace('$', '').replace('.', '').replace(',', '').strip())
+    except:
+        return 0
+
+def f_m(v): 
+    """ Formatea números enteros a string con separador de miles '.' """
+    try:
+        return f"{int(v or 0):,}".replace(",", ".")
+    except:
+        return "0"
+
+def db_query(sql, params=(), commit=False):
+    """ Ejecuta consultas en SQLite de forma segura """
+    try:
+        with sqlite3.connect('datos_alquileres.db', check_same_thread=False) as conn:
+            if commit:
+                cur = conn.cursor()
+                cur.execute(sql, params)
+                conn.commit()
+                return cur.lastrowid
+            return pd.read_sql_query(sql, conn, params=params)
+    except Exception as e:
+        st.error(f"Error de base de datos: {e}")
+        return None
+
+
+    
 # ==========================================
 # 1. CONFIGURACIÓN E IDENTIDAD (V.5.0)
 # ==========================================
@@ -174,33 +207,21 @@ if menu == "🏠 Inventario":
     
     # Intentamos una consulta robusta. Si falla por columnas nuevas, usamos la básica.
     try:
-        query_inv = """
-            SELECT 
-                b.nombre as Inmueble, 
-                i.tipo as Unidad, 
-                i.precio_alquiler as Alquiler, 
-                i.costo_contrato as Contrato, 
-                i.deposito_base as Deposito,
-                CASE WHEN c.activo = 1 THEN '🔴 OCUPADO' ELSE '🟢 LIBRE' END as Estado,
-                CASE 
-                    WHEN c.activo = 1 THEN c.fecha_fin 
-                    ELSE 'DISPONIBLE HOY' 
-                END as [Disponible Desde]
-            FROM inmuebles i 
-            JOIN bloques b ON i.id_bloque = b.id
-            LEFT JOIN contratos c ON i.id = c.id_inmueble AND c.activo = 1
-        """
-        df = db_query(query_inv)
-    except:
-        # Si la base de datos es vieja y no tiene fecha_fin, mostramos lo básico para no romper nada
-        query_inv = """
-            SELECT b.nombre as Inmueble, i.tipo as Unidad, i.precio_alquiler as Alquiler, 
-            i.costo_contrato as Contrato, i.deposito_base as Deposito,
-            'VERIFICAR' as Estado, 'S/D' as [Disponible Desde]
-            FROM inmuebles i JOIN bloques b ON i.id_bloque = b.id
-        """
-        df = db_query(query_inv)
 
+        # Bloque para la sección de Inventario
+        df = db_query("""
+           SELECT 
+              b.nombre as Inmueble, 
+              i.tipo as Unidad, 
+              i.precio_alquiler as Alquiler, 
+              i.costo_contrato as Contrato, 
+              i.deposito_base as Deposito,
+              CASE WHEN c.activo = 1 THEN '🔴 OCUPADO' ELSE '🟢 LIBRE' END as Estado,
+              CASE WHEN c.activo = 1 THEN c.fecha_fin ELSE 'DISPONIBLE HOY' END as [Disponible Desde]
+           FROM inmuebles i 
+           JOIN bloques b ON i.id_bloque = b.id
+           LEFT JOIN contratos c ON i.id = c.id_inmueble AND c.activo = 1
+        """)
     if df is not None and not df.empty:
         # Métricas de control arriba
         c1, c2 = st.columns(2)
