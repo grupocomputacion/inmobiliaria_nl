@@ -356,7 +356,7 @@ elif menu == "💰 Cobranzas":
         ORDER BY inq.nombre, d.concepto
     """)
 
-    if deu_pend is not None and not deu_pend.empty:
+    if deu_pend is None or deu_pend.empty:    
         # Formateamos para la visualización del multiselect
         deu_pend_display = deu_pend.copy()
         
