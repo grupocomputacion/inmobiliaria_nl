@@ -330,7 +330,7 @@ elif menu == "📝 Nuevo Contrato":
 
 
 # ==========================================
-# 3. COBRANZAS (V.7.5 - CORREGIDA)
+# 3. COBRANZAS (V.7.5 - FINAL CORREGIDA)
 # ==========================================
 elif menu == "💰 Cobranzas":
     st.header("Gestión de Cobranzas y Pagos")
@@ -356,8 +356,8 @@ elif menu == "💰 Cobranzas":
         ORDER BY inq.nombre, d.concepto
     """)
 
-    if deu_pend is None or deu_pend.empty:    
-        # Formateamos para la visualización del multiselect
+    # --- CAMBIO AQUÍ: Si NO está vacío, mostrar formulario ---
+    if deu_pend is not None and not deu_pend.empty:    
         deu_pend_display = deu_pend.copy()
         
         with st.form("f_cobranza_masiva"):
@@ -379,15 +379,13 @@ elif menu == "💰 Cobranzas":
                 c1, c2 = st.columns(2)
                 c1.metric("Suma Deudas Seleccionadas", f"$ {total_teorico}")
                 
+                # Usamos value para que el usuario pueda editarlo
                 monto_input = c2.text_input("Monto Total Recibido:", value=str(total_teorico))
                 fecha_cobro = c1.date_input("Fecha de Cobro", date.today())
-                # 'cl' debe ser tu función de limpieza de números
                 monto_real = float(cl(monto_input)) if monto_input else 0.0
             
-            # EL BOTÓN SIEMPRE DENTRO DEL FORM
             procesar_pago = st.form_submit_button("✅ PROCESAR PAGO Y GENERAR RECIBO")
 
-        # LÓGICA POST-SUBMIT (Fuera del form para evitar errores de refresco)
         if procesar_pago:
             if not sel_rows:
                 st.error("Debe seleccionar al menos una deuda.")
@@ -417,7 +415,6 @@ elif menu == "💰 Cobranzas":
                             saldo_restante = 0
                             tipo_pago = "(Pago Parcial)"
 
-                        # Update DB
                         db_query("""
                             UPDATE deudas 
                             SET monto_pago = IFNULL(monto_pago, 0) + ?, pagado = ?, fecha_pago = ? 
@@ -425,7 +422,7 @@ elif menu == "💰 Cobranzas":
                         
                         detalles_recibo.append(f"{deuda['Concepto']} - {deuda['Referencia']} {tipo_pago}: ${imputar}")
 
-                    # GENERACIÓN DEL PDF
+                    # Generar PDF
                     pdf = PDFRecibo()
                     pdf.add_page()
                     pdf.set_font('Arial', '', 11)
@@ -440,8 +437,14 @@ elif menu == "💰 Cobranzas":
                     for d in detalles_recibo:
                         pdf.cell(0, 6, f"- {d}", 0, 1, 'L')
 
-                    # Guardar en Session State
-                    st.session_state['recibo_pdf'] = pdf.output(dest='S').encode('latin-1')
+                    # Guardar en Session State (Importante usar output(dest='S'))
+                    # En versiones modernas de fpdf2, esto devuelve un bytearray o string
+                    pdf_output = pdf.output(dest='S')
+                    if isinstance(pdf_output, str):
+                        st.session_state['recibo_pdf'] = pdf_output.encode('latin-1')
+                    else:
+                        st.session_state['recibo_pdf'] = pdf_output
+
                     st.session_state['inquilino_ws'] = inq_data['WhatsApp']
                     st.session_state['total_cobrado'] = monto_real
                     
@@ -451,7 +454,7 @@ elif menu == "💰 Cobranzas":
                 except Exception as e:
                     st.error(f"Error: {e}")
 
-    # --- MOSTRAR RESULTADOS (FUERA DEL FORM) ---
+    # --- MOSTRAR RESULTADOS Y ESTADO VACÍO ---
     if 'recibo_pdf' in st.session_state:
         st.divider()
         col_d1, col_d2 = st.columns(2)
@@ -467,14 +470,15 @@ elif menu == "💰 Cobranzas":
         msg_wa = f"Hola, recibimos tu pago por ${st.session_state['total_cobrado']}. Saludos!"
         link_wa = f"https://wa.me/{wa_num}?text={msg_wa.replace(' ', '%20')}"
         
-        col_d2.markdown(f'<a href="{link_wa}" target="_blank"><button style="background-color: #25D366; color: white; width: 100%; border: none; padding: 10px; border-radius: 5px;">📲 WhatsApp</button></a>', unsafe_allow_html=True)
+        col_d2.markdown(f'<a href="{link_wa}" target="_blank"><button style="background-color: #25D366; color: white; width: 100%; border: none; padding: 10px; border-radius: 5px; cursor: pointer;">📲 WhatsApp</button></a>', unsafe_allow_html=True)
 
         if st.button("🔄 Nueva Cobranza"):
             del st.session_state['recibo_pdf']
             st.rerun()
-    else:
-        if deu_pend is None or deu_pend.empty:
-            st.success("✅ ¡Todas las cobranzas están al día!")
+            
+    # Si no hay deudas y no acabamos de generar un recibo
+    elif deu_pend is None or deu_pend.empty:
+        st.success("✅ ¡Todas las cobranzas están al día!")
 
 
 # ==========================================
