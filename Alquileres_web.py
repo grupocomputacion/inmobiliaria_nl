@@ -319,14 +319,220 @@ elif menu == "📝 Nuevo Contrato":
         st.warning("Debe cargar Inmuebles, Unidades e Inquilinos en 'Maestros' primero.")
 
 
+# ==========================================
+# 3. COBRANZAS (V.7.5 - PAGOS PARCIALES, RECIBO PDF Y WA)
+# ==========================================
 elif menu == "💰 Cobranzas":
-    st.header("Cobranzas")
-    deu = db_query("SELECT d.id, inq.nombre, i.tipo, d.concepto, d.monto_debe FROM deudas d JOIN contratos c ON d.id_contrato=c.id JOIN inmuebles i ON c.id_inmueble=i.id JOIN inquilinos inq ON c.id_inquilino=inq.id WHERE d.pagado=0")
-    if deu is not None:
-        for _, r in deu.iterrows():
-            with st.expander(f"{r['nombre']} - {r['tipo']} (${f_m(r['monto_debe'])})"):
-                if st.button("Confirmar Pago", key=f"b{r['id']}"):
-                    db_query("UPDATE deudas SET pagado=1, fecha_pago=?, monto_pago=? WHERE id=?", (date.today(), r['monto_debe'], r['id']), commit=True); st.rerun()
+    st.header("Gestión de Cobranzas y Pagos")
+    st.markdown("### Seleccione las deudas a cobrar")
+    
+    # Query de control: Traemos todas las deudas pendientes, con datos del inquilino e inmueble
+    deu_pend = db_query("""
+        SELECT 
+            d.id as id_deuda, 
+            inq.nombre as Inquilino, 
+            inq.celular as WhatsApp,
+            b.nombre || ' - ' || i.tipo as Referencia,
+            d.concepto as Concepto, 
+            d.monto_debe as [Total Deuda],
+            d.monto_debe - IFNULL(d.monto_pago, 0) as [Saldo Pendiente],
+            c.id as id_contrato
+        FROM deudas d
+        JOIN contratos c ON d.id_contrato = c.id
+        JOIN inmuebles i ON c.id_inmueble = i.id
+        JOIN bloques b ON i.id_bloque = b.id
+        JOIN inquilinos inq ON c.id_inquilino = inq.id
+        WHERE d.pagado = 0
+        ORDER BY inq.nombre, d.concepto
+    """)
+
+    if deu_pend is not None and not deu_pend.empty:
+        with st.form("f_cobranza_masiva", clear_on_submit=False):
+            st.write("**Detalle de Deudas**")
+            
+            # Formateamos montos para visualización
+            deu_pend_display = deu_pend.copy()
+            deu_pend_display['Total Deuda'] = deu_pend_display['Total Deuda'].apply(f_m)
+            deu_pend_display['Saldo Pendiente'] = deu_pend_display['Saldo Pendiente'].apply(f_m)
+            
+            # 1. Marco de selección de deudas (Selección múltiple)
+            sel_rows = st.multiselect(
+                "Marque las deudas que el inquilino desea abonar:",
+                deu_pend_display.index.tolist(),
+                format_func=lambda x: f"{deu_pend_display.loc[x, 'Inquilino']} - {deu_pend_display.loc[x, 'Referencia']} - {deu_pend_display.loc[x, 'Concepto']} - ${deu_pend_display.loc[x, 'Saldo Pendiente']}"
+            )
+            
+            # 2. Resumen y Monto a Cobrar
+            if sel_rows:
+                deudas_seleccionadas = deu_pend.loc[sel_rows]
+                # Calculamos el total teórico a cobrar (la suma de saldos pendientes)
+                total_a_cobrar = deudas_seleccionadas['Saldo Pendiente'].sum()
+                
+                c1, c2 = st.columns([1, 2])
+                c1.metric("Suma Deuda Marcada", f"$ {f_m(total_a_cobrar)}")
+                
+                # Input para Pago Parcial (por defecto viene con el total teórico)
+                monto_pagado_input = c2.text_input(
+                    "Monto Total a Recibir (Edite si es pago parcial):", 
+                    value=f_m(total_a_cobrar),
+                    help="Si el monto es menor, se cubrirán las deudas por orden y quedará saldo pendiente."
+                )
+                
+                fecha_cobro = c1.date_input("Fecha de Cobro", date.today())
+                monto_real = cl(monto_pagado_input)
+                
+                st.warning("⚠️ Asegúrese de haber verificado el monto recibido antes de procesar.")
+                col_b1, col_b2 = st.columns(2)
+                
+                procesar_pago = col_b1.form_submit_button("✅ PROCESAR PAGO Y GENERAR RECIBO")
+                
+                # 3. Lógica de Pago y Generación de Recibo
+                if procesar_pago:
+                    if monto_real <= 0:
+                        st.error("El monto a recibir debe ser mayor a 0.")
+                    else:
+                        saldo_restante = monto_real
+                        # Tomamos datos del inquilino (asumimos que todos los seleccionados son del mismo inquilino)
+                        inq_data = deudas_seleccionadas.iloc[0] 
+                        detalles_recibo = [] # Para el PDF
+                        
+                        # Recorremos deudas seleccionadas para aplicar el pago (parcial o total)
+                        for _, deuda in deudas_seleccionadas.iterrows():
+                            # Monto real que esta deuda necesita para cancelarse
+                            saldo_deuda = deuda['Saldo Pendiente']
+                            id_deuda_sql = deuda['id_deuda']
+                            
+                            monto_a_imputar = 0 # Lo que vamos a grabar en la DB para esta deuda
+                            
+                            if saldo_restante >= saldo_deuda:
+                                # Pago Completo de esta deuda
+                                monto_a_imputar = saldo_deuda
+                                saldo_restante -= saldo_deuda
+                                db_query("""
+                                    UPDATE deudas 
+                                    SET monto_pago = monto_pago + ?, pagado = 1, fecha_pago = ? 
+                                    WHERE id = ?""", (int(monto_a_imputar), fecha_cobro, id_deuda_sql), commit=True)
+                                
+                                detalles_recibo.append(f"{deuda['Concepto']} - {deuda['Referencia']} (Pago Completo): ${f_m(monto_a_imputar)}")
+                                
+                            elif saldo_restante > 0:
+                                # Pago Parcial de esta deuda
+                                monto_a_imputar = saldo_restante
+                                saldo_restante = 0 # Ya no queda dinero
+                                db_query("""
+                                    UPDATE deudas 
+                                    SET monto_pago = monto_pago + ?, pagado = 0, fecha_pago = ? 
+                                    WHERE id = ?""", (int(monto_a_imputar), fecha_cobro, id_deuda_sql), commit=True)
+                                
+                                detalles_recibo.append(f"{deuda['Concepto']} - {deuda['Referencia']} (Pago Parcial): ${f_m(monto_a_imputar)}")
+                            
+                            # Si saldo_restante es 0 y hay más deudas, se saltean y quedan pendientes
+                        
+                        st.success(f"Cobro procesado exitosamente por ${f_m(monto_real)}.")
+                        
+                        # 4. GENERACIÓN DE RECIBO PDF DINÁMICO
+                        try:
+                            class PDFRecibo(FPDF):
+                                def header(self):
+                                    if os.path.exists("alquileres.jpg"):
+                                        self.image("alquileres.jpg", 10, 8, 30)
+                                    self.set_font('Arial', 'B', 16)
+                                    self.cell(80)
+                                    self.cell(30, 10, 'RECIBO OFICIAL DE PAGO', 0, 0, 'C')
+                                    self.ln(20)
+                            
+                            pdf = PDFRecibo()
+                            pdf.add_page()
+                            pdf.set_font('Arial', '', 11)
+                            
+                            # Cabecera Recibo
+                            pdf.cell(100, 7, f"NL INMOBILIARIA - CUIT 30-71884850-0", 0, 0, 'L')
+                            pdf.cell(90, 7, f"Fecha: {fecha_cobro.strftime('%d/%m/%Y')}", 0, 1, 'R')
+                            pdf.ln(10)
+                            
+                            # Cuerpo del Recibo
+                            pdf.set_font('Arial', 'B', 12)
+                            pdf.cell(0, 7, f"RECIBIMOS de {inq_data['Inquilino'].upper()}", 0, 1, 'L')
+                            pdf.ln(5)
+                            
+                            pdf.set_font('Arial', '', 11)
+                            pdf.cell(0, 7, f"La suma total de: $ {f_m(monto_real)}", 0, 1, 'L')
+                            pdf.ln(5)
+                            
+                            pdf.set_font('Arial', 'U', 11)
+                            pdf.cell(0, 7, "En concepto de:", 0, 1, 'L')
+                            pdf.set_font('Arial', '', 10)
+                            pdf.ln(3)
+                            
+                            # Detalle de lo abonado (Punto por punto)
+                            for detalle in detalles_recibo:
+                                pdf.cell(0, 6, f"- {detalle}", 0, 1, 'L')
+                            
+                            # Saldo Pendiente Total del Inquilino (Si lo hay)
+                            if saldo_restante == 0 and monto_real < total_a_cobrar:
+                                pdf.ln(5)
+                                pdf.set_font('Arial', 'B', 11)
+                                pdf.cell(0, 7, f"SALDO PENDIENTE TOTAL: $ {f_m(total_a_cobrar - monto_real)}", 0, 1, 'L')
+                                pdf.set_font('Arial', '', 10)
+                            
+                            # Pie de Recibo y Firma
+                            pdf.ln(25)
+                            pdf.cell(110)
+                            pdf.cell(80, 7, "_______________________________", 0, 1, 'C')
+                            pdf.cell(110)
+                            pdf.cell(80, 7, "NL INMOBILIARIA", 0, 1, 'C')
+                            pdf.set_font('Arial', '', 9)
+                            pdf.cell(110)
+                            pdf.cell(80, 5, "Firma Autorizada", 0, 1, 'C')
+                            
+                            # Retornamos el PDF binario para descarga
+                            pdf_bytes = pdf.output(dest='S')
+                            st.session_state['recibo_pdf'] = bytes(pdf_bytes)
+                            st.session_state['inquilino_ws'] = inq_data['WhatsApp']
+                            st.session_state['total_cobrado'] = f_m(monto_real)
+                            st.rerun() # Recargamos para mostrar el botón de descarga
+                            
+                        except Exception as e:
+                            st.error(f"Error al generar recibo: {e}")
+
+            else:
+                st.info("Seleccione al menos una deuda para procesar el cobro.")
+
+        # --- BOTONES DE DESCARGA Y WA (FUERA DEL FORM) ---
+        if 'recibo_pdf' in st.session_state:
+            st.write("---")
+            st.subheader("🎉 ¡Cobro Registrado!")
+            col_d1, col_d2 = st.columns(2)
+            
+            # Botón 1: Descargar PDF Localmente
+            col_d1.download_button(
+                label="📥 Descargar Recibo PDF",
+                data=st.session_state['recibo_pdf'],
+                file_name=f"Recibo_{date.today()}.pdf",
+                mime="application/pdf"
+            )
+            
+            # Botón 2: Enviar por WhatsApp (Mensaje con link o aviso)
+            wa_num = st.session_state['inquilino_ws'].replace('+', '').replace(' ', '').strip()
+            msg_wa = f"Hola, te enviamos tu recibo de NL INMOBILIARIA por ${st.session_state['total_cobrado']}. Podés descargarlo aquí: [LINK_AL_PDF_SI_ESTA_PUBLICADO]"
+            
+            # Nota técnica: Streamlit no puede adjuntar archivos locales directamente a WA Web.
+            # Esta solución abre WA con el mensaje predefinido.
+            link_wa = f"https://wa.me/{wa_num}?text={msg_wa.replace(' ', '%20')}"
+            
+            col_d2.markdown(
+                f'<a href="{link_wa}" target="_blank"><button style="background-color: #25D366; color: white; font-weight: bold; width: 100%; border: none; padding: 10px; border-radius: 5px; cursor: pointer;">📲 Enviar Aviso WhatsApp</button></a>',
+                unsafe_allow_html=True
+            )
+            
+            # Botón para limpiar el estado y hacer otra cobranza
+            if st.button("Limpiar y Cobrar Nuevo"):
+                del st.session_state['recibo_pdf']
+                st.rerun()
+
+    else:
+        st.success("✅ ¡Todas las cobranzas están al día!")
+# ==========================================
 
 elif menu == "🚨 Morosos":
     st.header("Morosos")
