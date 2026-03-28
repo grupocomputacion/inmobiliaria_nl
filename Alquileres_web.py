@@ -330,13 +330,11 @@ elif menu == "📝 Nuevo Contrato":
 
 
 # ==========================================
-# 3. COBRANZAS (V.7.7 - PAGOS PARCIALES & PDF ONLY)
+# 3. COBRANZAS (V.7.8 - FIXED VISIBILITY)
 # ==========================================
 elif menu == "💰 Cobranzas":
     st.header("Gestión de Cobranzas y Pagos")
-    st.info("Seleccione las deudas. Si el pago es parcial, modifique el 'Monto a Cobrar' antes de procesar.")
     
-    # 1. Consulta de deudas pendientes
     deu_pend = db_query("""
         SELECT 
             d.id as id_deuda, 
@@ -354,49 +352,49 @@ elif menu == "💰 Cobranzas":
     """)
 
     if deu_pend is not None and not deu_pend.empty:
-        with st.form("f_cobranza_nueva", clear_on_submit=False):
-            st.write("**Detalle de la Operación**")
+        # --- FORMULARIO REDISEÑADO ---
+        with st.form("f_cobranza_estable", clear_on_submit=False):
+            st.subheader("Detalle de la Operación")
             
-            # Selección de deudas
+            # 1. Selección de deudas
             indices_sel = st.multiselect(
                 "Deudas a incluir en este pago:",
                 deu_pend.index.tolist(),
                 format_func=lambda x: f"{deu_pend.loc[x, 'Inquilino']} | {deu_pend.loc[x, 'Concepto']} | ${deu_pend.loc[x, 'Saldo Pendiente']}"
             )
             
-            monto_a_cobrar = 0.0
-            fecha_pago = date.today()
-
+            # 2. CAMPOS SIEMPRE VISIBLES (Para evitar el error de tu captura)
+            st.write("---")
+            col1, col2 = st.columns(2)
+            
+            fecha_pago = col1.date_input("Fecha de Cobro", date.today())
+            
+            # Calculamos el total sugerido solo si hay algo seleccionado
+            total_sugerido = 0.0
             if indices_sel:
-                deudas_seleccionadas = deu_pend.loc[indices_sel]
-                total_deuda_nominal = float(deudas_seleccionadas['Saldo Pendiente'].sum())
-                
-                col1, col2 = st.columns(2)
-                col1.date_input("Fecha de Cobro", date.today(), key="fecha_pago_manual")
-                
-                # USO DE NUMBER_INPUT PARA PAGOS PARCIALES
-                # Esto permite editar el monto con precisión y flechas
-                monto_a_cobrar = col2.number_input(
-                    "Monto TOTAL recibido ($):", 
-                    min_value=0.0, 
-                    max_value=total_deuda_nominal + 1000000.0, 
-                    value=total_deuda_nominal,
-                    step=100.0,
-                    key="monto_manual_cobro"
-                )
-                
-                st.warning(f"Se imputarán ${monto_a_cobrar} de una deuda total de ${total_deuda_nominal}")
+                total_sugerido = float(deu_pend.loc[indices_sel, 'Saldo Pendiente'].sum())
+            
+            # EL CAMPO QUE NECESITÁS: Siempre está ahí, pero se actualiza el valor sugerido
+            monto_a_cobrar = col2.number_input(
+                "Monto REAL a recibir ($):", 
+                min_value=0.0, 
+                value=total_sugerido,
+                help="Aquí es donde debés poner los 150.000 si el total es 250.000"
+            )
+            
+            st.caption("Nota: Si el monto ingresado es menor al total de las deudas seleccionadas, se generará un pago parcial.")
             
             btn_procesar = st.form_submit_button("✅ REGISTRAR PAGO Y CREAR PDF")
 
-        # --- PROCESAMIENTO AL HACER CLICK ---
+        # --- PROCESAMIENTO ---
         if btn_procesar:
             if not indices_sel:
-                st.error("Por favor, seleccione al menos una deuda.")
+                st.error("Debe seleccionar al menos una deuda de la lista superior.")
             elif monto_a_cobrar <= 0:
-                st.error("El monto debe ser mayor a cero.")
+                st.error("El monto ingresado debe ser mayor a 0.")
             else:
                 try:
+                    # Lógica de imputación (la misma que antes, pero asegurada)
                     saldo_disponible = monto_a_cobrar
                     filas_seleccionadas = deu_pend.loc[indices_sel]
                     inquilino_nombre = filas_seleccionadas.iloc[0]['Inquilino']
@@ -409,76 +407,59 @@ elif menu == "💰 Cobranzas":
                         pendiente_fila = float(fila['Saldo Pendiente'])
                         
                         if saldo_disponible >= pendiente_fila:
-                            # Paga la totalidad de esta fila
                             cobro_actual = pendiente_fila
                             pago_completo = 1
                             saldo_disponible -= pendiente_fila
                             desc_estado = "(Cancelado)"
                         else:
-                            # Pago PARCIAL de esta fila
                             cobro_actual = saldo_disponible
                             pago_completo = 0
                             saldo_disponible = 0
                             desc_estado = "(Pago Parcial)"
 
-                        # Actualizar base de datos
                         db_query("""
                             UPDATE deudas 
                             SET monto_pago = IFNULL(monto_pago, 0) + ?, 
                                 pagado = ?, 
                                 fecha_pago = ? 
                             WHERE id = ?
-                        """, (cobro_actual, pago_completo, date.today(), id_d), commit=True)
+                        """, (cobro_actual, pago_completo, fecha_pago, id_d), commit=True)
                         
-                        items_recibo.append(f"{fila['Concepto']} - {fila['Referencia']} {desc_estado}: ${cobro_actual}")
+                        items_recibo.append(f"{fila['Concepto']} - {desc_estado}: ${cobro_actual}")
 
-                    # --- GENERACIÓN DEL PDF ---
+                    # Crear PDF
                     pdf = PDFRecibo()
                     pdf.add_page()
                     pdf.set_font('Arial', 'B', 14)
                     pdf.cell(0, 10, "COMPROBANTE DE PAGO", ln=True, align='C')
-                    pdf.ln(5)
                     pdf.set_font('Arial', '', 11)
                     pdf.cell(0, 8, f"Inquilino: {inquilino_nombre}", ln=True)
-                    pdf.cell(0, 8, f"Fecha: {date.today().strftime('%d/%m/%Y')}", ln=True)
                     pdf.cell(0, 8, f"Total Recibido: $ {monto_a_cobrar}", ln=True)
                     pdf.ln(5)
-                    pdf.set_font('Arial', 'B', 11)
-                    pdf.cell(0, 8, "Detalle de imputación:", ln=True)
-                    pdf.set_font('Arial', '', 10)
                     for item in items_recibo:
-                        pdf.cell(0, 6, f"  > {item}", ln=True)
+                        pdf.cell(0, 7, f"- {item}", ln=True)
 
-                    # Guardar PDF en bytes para el botón
                     raw_pdf = pdf.output(dest='S')
                     st.session_state['pdf_data'] = bytes(raw_pdf, 'latin-1') if isinstance(raw_pdf, str) else bytes(raw_pdf)
                     
-                    st.success("Cobranza registrada correctamente.")
+                    st.success("¡Cobro registrado! Descargue el PDF abajo.")
                     st.rerun()
 
                 except Exception as e:
-                    st.error(f"Error técnico: {e}")
+                    st.error(f"Error al grabar: {e}")
 
-    # --- MOSTRAR SOLO DESCARGA (FUERA DEL FORM) ---
+    # --- BOTÓN DE DESCARGA ---
     if 'pdf_data' in st.session_state:
         st.divider()
-        st.subheader("📄 Recibo Listo")
-        
-        # Botón de descarga centrado y prominente
         st.download_button(
-            label="📥 DESCARGAR RECIBO EN PDF",
+            label="📥 DESCARGAR RECIBO PDF",
             data=st.session_state['pdf_data'],
-            file_name=f"Recibo_Pago_{date.today()}.pdf",
-            mime="application/pdf",
-            use_container_width=True
+            file_name=f"Recibo_{date.today()}.pdf",
+            mime="application/pdf"
         )
-        
-        if st.button("🔄 Registrar otra cobranza"):
+        if st.button("Limpiar y nueva cobranza"):
             del st.session_state['pdf_data']
             st.rerun()
-            
-    elif deu_pend is None or deu_pend.empty:
-        st.success("✅ No hay deudas pendientes de cobro.")
 
         
 # ==========================================
