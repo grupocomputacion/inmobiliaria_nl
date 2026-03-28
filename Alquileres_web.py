@@ -330,7 +330,7 @@ elif menu == "📝 Nuevo Contrato":
 
 
 # ==========================================
-# 3. COBRANZAS (V.7.9 - ANTI-SOBREESCRITURA)
+# 3. COBRANZAS (V.8.0 - LIVE MONITOR & SIGNATURE)
 # ==========================================
 elif menu == "💰 Cobranzas":
     st.header("Gestión de Cobranzas y Pagos")
@@ -352,7 +352,11 @@ elif menu == "💰 Cobranzas":
     """)
 
     if deu_pend is not None and not deu_pend.empty:
-        with st.form("f_cobranza_blindada", clear_on_submit=False):
+        # --- CÁLCULO PREVIO PARA MONITOR EN VIVO ---
+        # Usamos un contenedor vacío para mostrar el total antes del botón
+        placeholder_monto = st.empty()
+        
+        with st.form("f_cobranza_final", clear_on_submit=False):
             st.subheader("Detalle de la Operación")
             
             indices_sel = st.multiselect(
@@ -361,48 +365,48 @@ elif menu == "💰 Cobranzas":
                 format_func=lambda x: f"{deu_pend.loc[x, 'Inquilino']} | {deu_pend.loc[x, 'Concepto']} | ${deu_pend.loc[x, 'Saldo Pendiente']}"
             )
             
+            # Calculamos el total de lo que se va marcando
+            total_marcado = 0.0
+            if indices_sel:
+                total_marcado = float(deu_pend.loc[indices_sel, 'Saldo Pendiente'].sum())
+            
+            # MOSTRAR MONTO SELECCIONADO (Punto 1)
+            # Esto se actualiza cada vez que el usuario suma/resta una deuda en el multiselect
+            st.markdown(f"### Total Deuda Seleccionada: :blue[${total_marcado:,.2f}]")
+            
             st.write("---")
             col1, col2 = st.columns(2)
             
             fecha_pago = col1.date_input("Fecha de Cobro", date.today())
             
-            # Calculamos el total de las deudas marcadas
-            total_marcado = 0.0
-            if indices_sel:
-                total_marcado = float(deu_pend.loc[indices_sel, 'Saldo Pendiente'].sum())
-            
-            # IMPORTANTE: El number_input tiene una KEY. 
-            # Esto evita que Streamlit lo resetee al procesar el form.
-            monto_final = col2.number_input(
+            # El campo donde el usuario pone lo que realmente recibió (ej: 150.000)
+            monto_real_recibido = col2.number_input(
                 "Monto REAL recibido ($):", 
                 min_value=0.0, 
                 value=total_marcado,
-                key="monto_usuario_final" # <--- CLAVE PARA EL ÉXITO
+                key="monto_usuario_final",
+                help="Modifique este importe si el pago es parcial."
             )
             
-            st.info(f"Total de deuda seleccionada: ${total_marcado}")
-            btn_procesar = st.form_submit_button("✅ REGISTRAR PAGO Y CREAR PDF")
+            btn_procesar = st.form_submit_button("✅ REGISTRAR PAGO Y GENERAR RECIBO")
 
-        # --- PROCESAMIENTO ---
         if btn_procesar:
-            # LEEMOS EL VALOR DIRECTAMENTE DE LA MEMORIA (Session State)
-            # Esto asegura que tomamos lo que vos ESCRIBISTE, no lo que el código sugirió.
-            monto_real_a_grabar = st.session_state.monto_usuario_final
+            # Usamos el valor del session state para asegurar que respete el cambio manual
+            monto_a_grabar = st.session_state.monto_usuario_final
             
             if not indices_sel:
-                st.error("Seleccione deudas.")
-            elif monto_real_a_grabar <= 0:
+                st.error("Seleccione al menos una deuda.")
+            elif monto_a_grabar <= 0:
                 st.error("El monto debe ser mayor a 0.")
             else:
                 try:
-                    saldo_disponible = monto_real_a_grabar
+                    saldo_disponible = monto_a_grabar
                     filas_sel = deu_pend.loc[indices_sel]
                     inquilino_n = filas_sel.iloc[0]['Inquilino']
                     detalles_pago = []
 
                     for _, fila in filas_sel.iterrows():
                         if saldo_disponible <= 0: break
-                        
                         id_d = fila['id_deuda']
                         pendiente = float(fila['Saldo Pendiente'])
                         
@@ -417,47 +421,63 @@ elif menu == "💰 Cobranzas":
                             saldo_disponible = 0
                             txt_estado = "(Pago Parcial)"
 
-                        # Grabamos en DB
                         db_query("""
-                            UPDATE deudas 
-                            SET monto_pago = IFNULL(monto_pago, 0) + ?, 
-                                pagado = ?, 
-                                fecha_pago = ? 
-                            WHERE id = ?
+                            UPDATE deudas SET monto_pago = IFNULL(monto_pago, 0) + ?, 
+                            pagado = ?, fecha_pago = ? WHERE id = ?
                         """, (cobro_actual, esta_pagado, fecha_pago, id_d), commit=True)
                         
-                        detalles_pago.append(f"{fila['Concepto']} {txt_estado}: ${cobro_actual}")
+                        detalles_pago.append(f"{fila['Concepto']} - {fila['Referencia']} {txt_estado}: ${cobro_actual}")
 
-                    # Generamos PDF con el monto REAL grabado
+                    # --- GENERACIÓN DE PDF CON FIRMA (Punto 2) ---
                     pdf = PDFRecibo()
                     pdf.add_page()
+                    
+                    # Encabezado y Datos
                     pdf.set_font('Arial', 'B', 14)
                     pdf.cell(0, 10, "COMPROBANTE DE PAGO", ln=True, align='C')
+                    pdf.ln(5)
                     pdf.set_font('Arial', '', 11)
                     pdf.cell(0, 8, f"Inquilino: {inquilino_n}", ln=True)
                     pdf.cell(0, 8, f"Fecha: {fecha_pago.strftime('%d/%m/%Y')}", ln=True)
-                    pdf.cell(0, 8, f"TOTAL RECIBIDO: $ {monto_real_a_grabar}", ln=True) # <--- ACÁ DIRÁ 150.000
+                    pdf.cell(0, 8, f"DNI/CUIT: 30-71884850-0", ln=True) # <--- CUIT agregado aquí
+                    pdf.set_font('Arial', 'B', 11)
+                    pdf.cell(0, 10, f"TOTAL RECIBIDO: $ {monto_a_grabar:,.2f}", ln=True)
+                    
                     pdf.ln(5)
+                    pdf.set_font('Arial', 'B', 10)
+                    pdf.cell(0, 7, "Detalle de Imputación:", ln=True)
+                    pdf.set_font('Arial', '', 10)
                     for item in detalles_pago:
-                        pdf.cell(0, 7, f"- {item}", ln=True)
+                        pdf.cell(0, 6, f"  > {item}", ln=True)
+
+                    # --- SECCIÓN DE FIRMA ---
+                    pdf.ln(30) # Espacio para la firma
+                    pdf.set_font('Arial', '', 10)
+                    # Línea de firma
+                    pdf.cell(60, 0, '', 'T', 0, 'C') 
+                    pdf.ln(2)
+                    # Leyenda debajo de la línea
+                    pdf.set_font('Arial', 'B', 10)
+                    pdf.cell(60, 5, "NL INMOBILIARIA", 0, 1, 'C')
+                    pdf.set_font('Arial', '', 8)
+                    pdf.cell(60, 5, "Firma y Sello", 0, 1, 'C')
 
                     res_pdf = pdf.output(dest='S')
                     st.session_state['pdf_data'] = bytes(res_pdf, 'latin-1') if isinstance(res_pdf, str) else bytes(res_pdf)
                     
-                    st.success(f"Cobro procesado por ${monto_real_a_grabar}. Saldo restante de la deuda queda pendiente.")
+                    st.success(f"Cobro procesado por ${monto_a_grabar}")
                     st.rerun()
 
                 except Exception as e:
                     st.error(f"Error: {e}")
 
-    # --- DESCARGA ---
+    # --- BOTÓN DE DESCARGA ---
     if 'pdf_data' in st.session_state:
         st.divider()
         st.download_button("📥 DESCARGAR RECIBO PDF", st.session_state['pdf_data'], f"Recibo_{date.today()}.pdf", "application/pdf")
-        if st.button("Hacer otra cobranza"):
+        if st.button("Nueva cobranza"):
             del st.session_state['pdf_data']
             st.rerun()
-
         
 # ==========================================
 
