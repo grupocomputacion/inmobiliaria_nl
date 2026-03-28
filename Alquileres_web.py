@@ -473,7 +473,7 @@ elif menu == "💰 Cobranzas":
             del st.session_state['recibo_pdf']
             st.rerun()
     else:
-        if not deu_pend or deu_pend.empty:
+        if deu_pend is None or deu_pend.empty:
             st.success("✅ ¡Todas las cobranzas están al día!")
 
 
