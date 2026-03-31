@@ -232,70 +232,85 @@ with st.sidebar:
 # 5. SECCIONES
 # ==========================================
 
+
 # ==========================================
-# 1. INVENTARIO (V.12.0 - FILTROS AVANZADOS)
+# 1. INVENTARIO (V.12.5 - RECONSTRUIDO COMPLETO)
 # ==========================================
 if menu == "🏠 Inventario":
     st.header("Inventario Global de Unidades")
 
-    # --- LÓGICA DE FILTROS (Frontend) ---
+    # --- FILTROS DE VISTA (Manteniendo funcionalidad) ---
     c1, c2 = st.columns(2)
-    
-    # 1. Filtro por Inmueble (Edificio)
     df_bloques_filt = db_query("SELECT nombre FROM bloques")
     lista_inmuebles = ["Todos"] + df_bloques_filt['nombre'].tolist() if df_bloques_filt is not None else ["Todos"]
     sel_inmueble = c1.selectbox("🏢 Filtrar por Edificio:", lista_inmuebles)
-
-    # 2. Filtro por Disponibilidad
     sel_estado = c2.selectbox("🔑 Filtrar por Disponibilidad:", ["Todos", "Libre", "Ocupado"])
 
-    # --- CONSULTA BASE ---
-    # Traemos las unidades y verificamos si tienen contrato activo
+    # --- CONSULTA ROBUSTA (Recuperando Alquiler, Contrato, Deposito y Fechas) ---
     query_inv = """
         SELECT 
             b.nombre as Inmueble,
             i.tipo as Unidad,
-            i.precio_alquiler as Valor,
+            i.precio_alquiler as Alquiler,
+            i.costo_contrato as Contrato,
+            i.deposito_base as Deposito,
             CASE 
-                WHEN EXISTS (SELECT 1 FROM contratos WHERE id_inmueble = i.id AND activo = 1) THEN 'Ocupado'
+                WHEN c.id IS NOT NULL THEN 'Ocupado'
                 ELSE 'Libre'
-            END as Estado
+            END as Estado,
+            CASE 
+                WHEN c.id IS NOT NULL THEN c.fecha_fin
+                ELSE 'Inmediata'
+            END as [Disponible Desde]
         FROM inmuebles i
         JOIN bloques b ON i.id_bloque = b.id
+        LEFT JOIN contratos c ON i.id = c.id_inmueble AND c.activo = 1
         WHERE 1=1
     """
     
-    # Aplicar filtros SQL dinámicos
     if sel_inmueble != "Todos":
         query_inv += f" AND b.nombre = '{sel_inmueble}'"
     
     df_inv = db_query(query_inv)
 
     if df_inv is not None and not df_inv.empty:
-        # Aplicar filtro de estado en el DataFrame
+        # Aplicar filtro de estado en el DataFrame si no es "Todos"
         if sel_estado != "Todos":
             df_inv = df_inv[df_inv['Estado'] == sel_estado]
 
-        # --- MÉTRICAS DE ESTADO ---
+        # --- MÉTRICAS ---
         m1, m2, m3 = st.columns(3)
-        total = len(df_inv)
-        ocupados = len(df_inv[df_inv['Estado'] == 'Ocupado'])
-        libres = len(df_inv[df_inv['Estado'] == 'Libre'])
-        
-        m1.metric("Total Unidades", total)
-        m2.metric("Ocupadas", ocupados, delta_color="normal")
-        m3.metric("Libres", libres, delta=libres if libres > 0 else None)
+        m1.metric("Total Unidades", len(df_inv))
+        m2.metric("Ocupadas", len(df_inv[df_inv['Estado'] == 'Ocupado']))
+        m3.metric("Libres", len(df_inv[df_inv['Estado'] == 'Libre']))
 
         st.write("---")
 
-        # --- VISUALIZACIÓN ---
-        # Formateamos el precio para que se vea bien
+        # --- FORMATEO Y VISUALIZACIÓN ---
         df_show = df_inv.copy()
-        df_show['Valor'] = df_show['Valor'].apply(f_m)
         
-        # Aplicamos colores al texto del estado para que resalte
+        # Formateamos montos a moneda
+        for col in ['Alquiler', 'Contrato', 'Deposito']:
+            df_show[col] = df_show[col].apply(f_m)
+        
+        # Formateamos la fecha de disponibilidad para que sea legible
+        def format_fecha_disp(val):
+            if val == 'Inmediata':
+                return "✅ Inmediata"
+            try:
+                # Convertimos string a fecha y luego a formato DD/MM/YYYY
+                d = pd.to_datetime(val).date()
+                if d <= date.today():
+                    return "✅ Inmediata (Contrato Vencido)"
+                return f"⏳ {d.strftime('%d/%m/%Y')}"
+            except:
+                return val
+
+        df_show['Disponible Desde'] = df_show['Disponible Desde'].apply(format_fecha_disp)
+
+        # Estilo de colores para el Estado
         def color_estado(val):
-            color = 'red' if val == 'Ocupado' else 'green'
+            color = '#ff4b4b' if val == 'Ocupado' else '#28a745' # Rojo / Verde
             return f'color: {color}; font-weight: bold'
 
         st.dataframe(
@@ -303,8 +318,10 @@ if menu == "🏠 Inventario":
             use_container_width=True,
             hide_index=True
         )
+        
     else:
         st.info("No se encontraron unidades con los filtros seleccionados.")
+
         
 # ==========================================
 # 2. NUEVO CONTRATO + PDF (V.5.3 - AUTO-REFRESH)
