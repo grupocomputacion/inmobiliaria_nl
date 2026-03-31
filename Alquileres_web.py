@@ -651,19 +651,95 @@ elif menu == "⚙️ Maestros":
                     db_query(f"DELETE FROM inquilinos WHERE id={int(i_dat['id'])}", commit=True)
                     st.rerun()
 
-    # [El resto de pestañas 4, 5, 6 y 7 se mantienen igual que en la v.8.5]
-    # --- 4. CONTRATOS ---
-    with t4:
-        st.subheader("Contratos Vigentes")
-        df_cont = db_query("""SELECT c.id as ID_Contrato, b.nombre as Inmueble, i.tipo as Unidad, inq.nombre as Inquilino, c.fecha_inicio as Inicio, c.monto_alquiler as [Alquiler]
-                             FROM contratos c JOIN inmuebles i ON c.id_inmueble = i.id 
-                             JOIN bloques b ON i.id_bloque = b.id JOIN inquilinos inq ON c.id_inquilino = inq.id WHERE c.activo = 1""")
+    # --- 4. CONTRATOS (GESTIÓN DE BAJAS Y RENOVACIONES V.9.0) ---
+        with t4:
+            st.subheader("Gestión de Contratos Vigentes")
+        
+        # Traemos info completa para poder renovar con datos frescos de la unidad
+        query_cont = """
+            SELECT 
+                c.id as ID_Contrato, 
+                b.nombre as Inmueble, 
+                i.tipo as Unidad, 
+                inq.nombre as Inquilino, 
+                c.fecha_inicio as Inicio, 
+                c.fecha_fin as Fin,
+                c.monto_alquiler as [Alq_Actual],
+                c.id_inmueble,
+                c.id_inquilino,
+                i.precio_alquiler as Alq_Maestro,
+                i.costo_contrato as Con_Maestro,
+                i.deposito_base as Dep_Maestro
+            FROM contratos c 
+            JOIN inmuebles i ON c.id_inmueble = i.id 
+            JOIN bloques b ON i.id_bloque = b.id 
+            JOIN inquilinos inq ON c.id_inquilino = inq.id 
+            WHERE c.activo = 1
+        """
+        df_cont = db_query(query_cont)
+        
         if df_cont is not None and not df_cont.empty:
-            st.dataframe(df_cont, use_container_width=True, hide_index=True)
-            sel_c = st.selectbox("Seleccione ID para dar de BAJA", df_cont['ID_Contrato'].tolist())
-            if st.button("🚨 FINALIZAR CONTRATO"):
-                db_query(f"UPDATE contratos SET activo=0 WHERE id={sel_c}", commit=True)
+            # Vista simplificada para el usuario
+            df_v = df_cont[['ID_Contrato', 'Inmueble', 'Unidad', 'Inquilino', 'Inicio', 'Fin', 'Alq_Actual']]
+            st.dataframe(df_v, use_container_width=True, hide_index=True)
+            
+            st.write("---")
+            c1, c2 = st.columns(2)
+            sel_c_id = c1.selectbox("Seleccione ID de Contrato para operar", df_cont['ID_Contrato'].tolist())
+            
+            # Obtenemos la fila completa del contrato seleccionado
+            row_c = df_cont[df_cont['ID_Contrato'] == sel_c_id].iloc[0]
+            
+            # --- BOTÓN 1: FINALIZAR ---
+            if c1.button("🚨 FINALIZAR (Dar de Baja)"):
+                db_query(f"UPDATE contratos SET activo=0 WHERE id={sel_c_id}", commit=True)
+                st.warning(f"Contrato {sel_c_id} finalizado.")
                 st.rerun()
+            
+            # --- BOTÓN 2: RENOVAR ---
+            with c2:
+                st.markdown("**Renovación Automática**")
+                meses_renov = st.number_input("Meses de nueva vigencia", min_value=1, value=6, key="renov_meses")
+                
+                if st.button("🔄 RENOVAR CONTRATO"):
+                    try:
+                        # 1. Definir nuevas fechas (Inicia cuando termina el anterior o hoy)
+                        nueva_fecha_inicio = date.today()
+                        nueva_fecha_fin = nueva_fecha_inicio + timedelta(days=meses_renov * 30)
+                        
+                        # 2. Dar de baja el contrato actual
+                        db_query(f"UPDATE contratos SET activo=0 WHERE id={sel_c_id}", commit=True)
+                        
+                        # 3. Crear el NUEVO contrato con valores del MAESTRO de unidades
+                        nuevo_cid = db_query("""
+                            INSERT INTO contratos (id_inmueble, id_inquilino, fecha_inicio, fecha_fin, monto_alquiler, activo) 
+                            VALUES (?,?,?,?,?,1)
+                        """, (int(row_c['id_inmueble']), int(row_c['id_inquilino']), nueva_fecha_inicio, nueva_fecha_fin, row_c['Alq_Maestro']), commit=True)
+                        
+                        # 4. Generar las 3 deudas iniciales (tomando valores del maestro de unidades)
+                        db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe, pagado) VALUES (?, 'Mes 1 Alquiler (Renovación)', ?, 0)", (nuevo_cid, row_c['Alq_Maestro']), commit=True)
+                        db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe, pagado) VALUES (?, 'Garantía/Depósito (Renovación)', ?, 0)", (nuevo_cid, row_c['Dep_Maestro']), commit=True)
+                        db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe, pagado) VALUES (?, 'Gastos Contrato (Renovación)', ?, 0)", (nuevo_cid, row_c['Con_Maestro']), commit=True)
+                        
+                        # 5. Generar PDF (usamos la función que ya tenés definida en 'Nuevo Contrato')
+                        # Nota: sel_u e inq_data necesitan los diccionarios/series originales
+                        u_data = db_query(f"SELECT i.*, b.nombre, b.direccion, b.barrio, b.localidad FROM inmuebles i JOIN bloques b ON i.id_bloque=b.id WHERE i.id={row_c['id_inmueble']}").iloc[0]
+                        inq_data = db_query(f"SELECT * FROM inquilinos WHERE id={row_c['id_inquilino']}").iloc[0]
+                        
+                        pdf_bytes = generar_pdf_v5(u_data, inq_data, nueva_fecha_inicio, f_m(row_c['Alq_Maestro']), f_m(row_c['Dep_Maestro']), f_m(row_c['Con_Maestro']))
+                        
+                        st.session_state['pdf_ready'] = bytes(pdf_bytes)
+                        st.session_state['cid_last'] = nuevo_cid
+                        
+                        st.success(f"✅ ¡Contrato Renovado! Nuevo ID: {nuevo_cid}")
+                        st.info("El PDF de renovación se ha generado. Podés descargarlo abajo.")
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"Error en renovación: {e}")
+
+        else:
+            st.info("No hay contratos activos para gestionar.")
 
     # --- 5. BACKUP ---
     with t5:
