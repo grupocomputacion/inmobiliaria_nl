@@ -268,12 +268,11 @@ if menu == "🏠 Inventario":
 
         
 # ==========================================
-# 2. NUEVO CONTRATO + PDF (V.5.2 - CORREGIDO)
+# 2. NUEVO CONTRATO + PDF (V.5.3 - AUTO-REFRESH)
 # ==========================================
 elif menu == "📝 Nuevo Contrato":
     st.header("Formalización de Contrato y PDF")
     
-    # Query con nombres explícitos para evitar KeyError
     u_df = db_query("""
         SELECT i.id, b.nombre || ' - ' || i.tipo as ref, b.direccion, b.barrio, b.localidad, 
                i.tipo, i.precio_alquiler, i.costo_contrato, i.deposito_base 
@@ -282,49 +281,65 @@ elif menu == "📝 Nuevo Contrato":
     i_df = db_query("SELECT * FROM inquilinos")
     
     if u_df is not None and i_df is not None and not u_df.empty:
-        with st.form("f_contrato_v52"):
+        # --- PASO 1: SELECCIÓN FUERA DEL FORM ---
+        # Esto permite que al cambiar la unidad, Streamlit recargue la página y actualice sel_u
+        st.subheader("1. Selección de Unidad")
+        uid = st.selectbox("Elija la Unidad para el contrato", u_df['id'], 
+                           format_func=lambda x: u_df[u_df['id']==x]['ref'].values[0])
+        
+        # Obtenemos los datos actualizados de la unidad seleccionada
+        sel_u = u_df[u_df['id'] == uid].iloc[0]
+        
+        st.write("---")
+        st.subheader("2. Datos del Contrato")
+        
+        # --- PASO 2: FORMULARIO PARA DATOS VARIABLES ---
+        with st.form("f_contrato_v53"):
             col1, col2 = st.columns(2)
-            uid = col1.selectbox("Unidad", u_df['id'], format_func=lambda x: u_df[u_df['id']==x]['ref'].values[0])
-            iid = col2.selectbox("Inquilino", i_df['id'], format_func=lambda x: i_df[i_df['id']==x]['nombre'].values[0])
             
-            # 1. Selector de Meses (Punto 1 solicitado)
-            fini = col1.date_input("Fecha Inicio", date.today())
-            meses = col2.number_input("Cantidad de Meses", min_value=1, max_value=60, value=3)
+            # El Inquilino puede ir dentro porque no dispara cambios en otros campos
+            iid = col1.selectbox("Inquilino", i_df['id'], 
+                                 format_func=lambda x: i_df[i_df['id']==x]['nombre'].values[0])
             
-            sel_u = u_df[u_df['id'] == uid].iloc[0]
+            fini = col2.date_input("Fecha Inicio", date.today())
+            meses = col1.number_input("Cantidad de Meses", min_value=1, max_value=60, value=3)
             
-            # Montos con formato de miles
-            ma = col1.text_input("Alquiler Mensual", f_m(sel_u['precio_alquiler']))
-            md = col2.text_input("Depósito Garantía", f_m(sel_u['deposito_base']))
-            mc = st.text_input("Gasto Administrativo / Contrato", f_m(sel_u['costo_contrato']))
+            st.write("**Montos sugeridos (puede editarlos):**")
+            c_m1, c_m2, c_m3 = st.columns(3)
+            
+            # Ahora estos inputs toman el valor de sel_u actualizado
+            ma = c_m1.text_input("Alquiler Mensual", f_m(sel_u['precio_alquiler']))
+            md = c_m2.text_input("Depósito Garantía", f_m(sel_u['deposito_base']))
+            mc = c_m3.text_input("Gasto Administrativo", f_m(sel_u['costo_contrato']))
             
             if st.form_submit_button("GRABAR Y GENERAR PDF"):
-                # Calculamos vencimiento exacto para Disponibilidad
                 f_vence = fini + timedelta(days=meses * 30)
                 
                 # Grabar Contrato
                 cid = db_query("""INSERT INTO contratos (id_inmueble, id_inquilino, fecha_inicio, fecha_fin, monto_alquiler) 
                                  VALUES (?,?,?,?,?)""", (uid, iid, fini, f_vence, cl(ma)), commit=True)
                 
-                # Generar las 3 deudas iniciales
+                # Generar deudas iniciales
                 db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe) VALUES (?, 'Mes 1 Alquiler', ?)", (cid, cl(ma)), commit=True)
                 db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe) VALUES (?, 'Garantía/Depósito', ?)", (cid, cl(md)), commit=True)
                 db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe) VALUES (?, 'Gastos Administrativos', ?)", (cid, cl(mc)), commit=True)
                 
-                # Generar PDF con los datos validados
                 try:
                     pdf_bytes = generar_pdf_v5(sel_u, i_df[i_df['id']==iid].iloc[0], fini, ma, md, mc)
-                    
-                    # Verificación de seguridad: si es bytearray, Streamlit lo acepta, 
-                    # pero lo ideal es pasarle bytes puros.
                     st.session_state['pdf_ready'] = bytes(pdf_bytes) 
                     st.session_state['cid_last'] = cid
                     st.success(f"Contrato {cid} grabado. Vence el {f_vence.strftime('%d/%m/%Y')}")
+                    st.rerun() # Forzamos recarga para mostrar el botón de descarga
                 except Exception as e:
                     st.error(f"Error al generar PDF: {e}")
+
+        # Botón de descarga (fuera del form)
         if 'pdf_ready' in st.session_state:
             st.write("---")
-            st.download_button("📥 DESCARGAR CONTRATO PDF", st.session_state['pdf_ready'], f"Contrato_NL_{st.session_state['cid_last']}.pdf", "application/pdf")
+            st.download_button("📥 DESCARGAR CONTRATO PDF", 
+                               st.session_state['pdf_ready'], 
+                               f"Contrato_NL_{st.session_state.get('cid_last', 'nuevo')}.pdf", 
+                               "application/pdf")
     else:
         st.warning("Debe cargar Inmuebles, Unidades e Inquilinos en 'Maestros' primero.")
 
