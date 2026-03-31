@@ -874,48 +874,77 @@ elif menu == "⚙️ Maestros":
                 st.rerun()
 
 
-    # --- 5. BACKUP & RESTORE CORREGIDO ---
+
+    # --- 5. BACKUP & RESTORE (V.13.0 - BOTÓN DE DESCARGA FIJO) ---
     with t5:
-        st.subheader("💾 Centro de Datos")
+        st.subheader("💾 Centro de Datos y Seguridad")
         c_exp, c_imp, c_res = st.columns(3)
         
         with c_exp:
-            st.write("**Exportar**")
-            if st.button("📥 Generar Backup Excel"):
-                # ... (tu código de exportación) ...
-                st.success("Archivo generado.")
+            st.write("**Exportar Datos**")
+            # Paso 1: Generar el archivo
+            if st.button("📂 Preparar Archivo de Respaldo"):
+                try:
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                        # Tablas a exportar
+                        for tabla, hoja in [('bloques','Inmuebles'), ('inmuebles','Unidades'), 
+                                           ('inquilinos','Inquilinos'), ('contratos','Contratos'), 
+                                           ('deudas','Deudas')]:
+                            df_tmp = db_query(f"SELECT * FROM {tabla}")
+                            if df_tmp is not None:
+                                df_tmp.to_excel(writer, sheet_name=hoja, index=False)
+                    
+                    # Guardamos el binario en el estado de la sesión
+                    st.session_state['archivo_backup'] = output.getvalue()
+                    st.success("✅ Archivo preparado con éxito.")
+                except Exception as e:
+                    st.error(f"Error al preparar backup: {e}")
+
+            # Paso 2: Mostrar el botón de descarga si el archivo existe en memoria
+            if 'archivo_backup' in st.session_state:
+                st.download_button(
+                    label="📥 DESCARGAR EXCEL",
+                    data=st.session_state['archivo_backup'],
+                    file_name=f"Backup_Inmobiliaria_{date.today()}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="btn_descarga_final"
+                )
+                if st.button("Limpiar descarga", key="clear_bak"):
+                    del st.session_state['archivo_backup']
+                    st.rerun()
 
         with c_imp:
-            st.write("**Importar / Restaurar**")
-            archivo = st.file_uploader("Seleccione el archivo .xlsx", type=["xlsx"])
-            if archivo is not None:
-                # El botón solo aparece si hay un archivo cargado
-                if st.button("🚀 PROCESAR RESTAURACIÓN"):
+            st.write("**Restaurar Datos**")
+            archivo_subido = st.file_uploader("Subir backup (.xlsx)", type=["xlsx"])
+            if archivo_subido:
+                if st.button("🚀 Ejecutar Restauración"):
                     try:
-                        dfs = pd.read_excel(archivo, sheet_name=None)
-                        mapping = {'Inmuebles':'bloques', 'Unidades':'inmuebles', 'Inquilinos':'inquilinos', 'Contratos':'contratos', 'Deudas':'deudas'}
+                        dfs = pd.read_excel(archivo_subido, sheet_name=None)
+                        mapping = {'Inmuebles':'bloques', 'Unidades':'inmuebles', 
+                                   'Inquilinos':'inquilinos', 'Contratos':'contratos', 'Deudas':'deudas'}
                         with sqlite3.connect('datos_alquileres.db') as conn:
-                            for h, t in mapping.items():
-                                if h in dfs:
-                                    conn.execute(f"DELETE FROM {t}")
-                                    dfs[h].to_sql(t, conn, if_exists='append', index=False)
-                        st.success("✅ Datos restaurados correctamente.")
+                            for hoja, tabla in mapping.items():
+                                if hoja in dfs:
+                                    conn.execute(f"DELETE FROM {tabla}")
+                                    dfs[hoja].to_sql(tabla, conn, if_exists='append', index=False)
+                        st.success("✅ Sistema restaurado correctamente.")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Error: {e}")
+                        st.error(f"Error en restauración: {e}")
 
         with c_res:
-            st.write("**⚠️ Borrado Total**")
-            cod_m = st.text_input("Código Maestro", type="password")
+            st.write("**Zona de Peligro**")
+            cod_m = st.text_input("Código Maestro", type="password", key="pwd_reset")
             if st.button("🔥 RESET SISTEMA"):
                 if cod_m == "3280":
                     with sqlite3.connect('datos_alquileres.db') as conn:
                         for t in ['bloques','inmuebles','inquilinos','contratos','deudas']:
                             conn.execute(f"DELETE FROM {t}")
-                    st.success("Base de datos vaciada.")
+                    st.warning("Base de datos vaciada por completo.")
                     st.rerun()
                 else:
-                    st.error("Código Incorrecto")
+                    st.error("Código Maestro incorrecto.")
 
     # --- 6. LISTADO DE ALQUILADOS ---
     with t6:
