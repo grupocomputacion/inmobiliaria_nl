@@ -652,25 +652,17 @@ elif menu == "⚙️ Maestros":
                     st.rerun()
 
 
-# --- 4. CONTRATOS (V.9.1 - CORRECCIÓN DE VISTA Y RENOVACIÓN) ---
+# --- 4. CONTRATOS (V.9.5 - RENOVACIÓN CON CONTINUIDAD Y PDF) ---
     with t4:
         st.subheader("Gestión de Contratos Vigentes")
         
-        # Consulta robusta: Traemos todo lo necesario para mostrar y para renovar
         query_cont = """
             SELECT 
-                c.id as ID_Contrato, 
-                b.nombre as Inmueble, 
-                i.tipo as Unidad, 
-                inq.nombre as Inquilino, 
-                c.fecha_inicio as Inicio, 
-                c.fecha_fin as Fin,
-                c.monto_alquiler as [Alq_Actual],
-                i.precio_alquiler as Alq_Maestro,
-                i.costo_contrato as Con_Maestro,
-                i.deposito_base as Dep_Maestro,
-                c.id_inmueble,
-                c.id_inquilino
+                c.id as ID_Contrato, b.nombre as Inmueble, i.tipo as Unidad, 
+                inq.nombre as Inquilino, c.fecha_inicio as Inicio, c.fecha_fin as Fin,
+                c.monto_alquiler as [Alq_Actual], i.precio_alquiler as Alq_Maestro,
+                i.costo_contrato as Con_Maestro, i.deposito_base as Dep_Maestro,
+                c.id_inmueble, c.id_inquilino
             FROM contratos c 
             INNER JOIN inmuebles i ON c.id_inmueble = i.id 
             INNER JOIN bloques b ON i.id_bloque = b.id 
@@ -680,57 +672,69 @@ elif menu == "⚙️ Maestros":
         df_cont = db_query(query_cont)
         
         if df_cont is not None and not df_cont.empty:
-            # Mostramos la tabla limpia para el usuario
             df_display = df_cont[['ID_Contrato', 'Inmueble', 'Unidad', 'Inquilino', 'Inicio', 'Fin', 'Alq_Actual']].copy()
-            df_display['Alq_Actual'] = df_display['Alq_Actual'].apply(f_m)
             st.dataframe(df_display, use_container_width=True, hide_index=True)
             
             st.write("---")
             c1, c2 = st.columns(2)
-            
-            # Selector de contrato basado en el ID
-            sel_c_id = c1.selectbox("Seleccione ID de Contrato para operar", df_cont['ID_Contrato'].tolist())
-            
-            # Extraemos los datos de la fila seleccionada
+            sel_c_id = c1.selectbox("Seleccione ID de Contrato", df_cont['ID_Contrato'].tolist())
             row_sel = df_cont[df_cont['ID_Contrato'] == sel_c_id].iloc[0]
             
-            # --- ACCIÓN 1: FINALIZAR ---
-            if c1.button("🚨 FINALIZAR CONTRATO (Baja)"):
+            if c1.button("🚨 FINALIZAR CONTRATO"):
                 db_query(f"UPDATE contratos SET activo=0 WHERE id={sel_c_id}", commit=True)
-                st.success(f"Contrato {sel_c_id} finalizado.")
                 st.rerun()
             
-            # --- ACCIÓN 2: RENOVAR ---
             with c2:
-                st.markdown("**🔄 Renovación con Precios de Maestro**")
-                meses_r = st.number_input("Meses de nueva vigencia", min_value=1, value=6, key="r_meses")
+                st.markdown("**🔄 Renovar con Continuidad**")
+                meses_r = st.number_input("Meses a renovar", min_value=1, value=6, key="r_meses")
                 
-                if st.button("🚀 EJECUTAR RENOVACIÓN"):
+                if st.button("🚀 EJECUTAR RENOVACIÓN Y PDF"):
                     try:
-                        # 1. Definir fechas
-                        f_ini_n = date.today()
+                        # 1. LÓGICA DE FECHAS: Continuidad absoluta
+                        # El nuevo inicia el día después del fin del anterior
+                        f_fin_anterior = pd.to_datetime(row_sel['Fin']).date()
+                        f_ini_n = f_fin_anterior + timedelta(days=1)
                         f_fin_n = f_ini_n + timedelta(days=meses_r * 30)
                         
-                        # 2. Dar de baja el actual
+                        # 2. Transacción: Baja del viejo y Alta del nuevo
                         db_query(f"UPDATE contratos SET activo=0 WHERE id={sel_c_id}", commit=True)
                         
-                        # 3. Crear nuevo contrato con valores del MAESTRO (i.precio_alquiler, etc.)
                         nuevo_id = db_query("""
                             INSERT INTO contratos (id_inmueble, id_inquilino, fecha_inicio, fecha_fin, monto_alquiler, activo) 
                             VALUES (?,?,?,?,?,1)
                         """, (int(row_sel['id_inmueble']), int(row_sel['id_inquilino']), f_ini_n, f_fin_n, int(row_sel['Alq_Maestro'])), commit=True)
                         
-                        # 4. Generar deudas automáticas
+                        # 3. Deudas automáticas
                         db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe, monto_pago, pagado) VALUES (?, 'Alquiler Mes 1 (Renov)', ?, 0, 0)", (nuevo_id, int(row_sel['Alq_Maestro'])), commit=True)
                         db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe, monto_pago, pagado) VALUES (?, 'Depósito (Renov)', ?, 0, 0)", (nuevo_id, int(row_sel['Dep_Maestro'])), commit=True)
                         db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe, monto_pago, pagado) VALUES (?, 'Gasto Contrato (Renov)', ?, 0, 0)", (nuevo_id, int(row_sel['Con_Maestro'])), commit=True)
                         
-                        st.success(f"Renovado con éxito. Nuevo ID: {nuevo_id}")
-                        st.rerun()
+                        # 4. GENERACIÓN DE PDF INMEDIATA
+                        # Obtenemos datos limpios para el PDF
+                        u_data = db_query(f"SELECT i.*, b.nombre, b.direccion, b.barrio, b.localidad FROM inmuebles i JOIN bloques b ON i.id_bloque=b.id WHERE i.id={row_sel['id_inmueble']}").iloc[0]
+                        inq_data = db_query(f"SELECT * FROM inquilinos WHERE id={row_sel['id_inquilino']}").iloc[0]
+                        
+                        pdf_bytes = generar_pdf_v5(u_data, inq_data, f_ini_n, f_m(row_sel['Alq_Maestro']), f_m(row_sel['Dep_Maestro']), f_m(row_sel['Con_Maestro']))
+                        
+                        # Guardamos en session_state para que el botón de descarga aparezca
+                        st.session_state['pdf_ready'] = bytes(pdf_bytes)
+                        st.session_state['cid_last'] = nuevo_id
+                        
+                        st.success(f"Renovado. Nuevo Contrato: {nuevo_id} (Inicia: {f_ini_n})")
+                        st.rerun() # Recargamos para actualizar la tabla y mostrar el PDF
+                        
                     except Exception as e:
-                        st.error(f"Error al renovar: {e}")
-        else:
-            st.info("No hay contratos activos. Verifique que existan contratos cargados y con estado 'activo=1'.")
+                        st.error(f"Error en renovación: {e}")
+
+        # Sección de descarga (se muestra si existe un PDF recién generado)
+        if 'pdf_ready' in st.session_state:
+            st.write("---")
+            st.info(f"📄 PDF del Nuevo Contrato #{st.session_state.get('cid_last')} listo para descargar")
+            st.download_button("📥 DESCARGAR CONTRATO RENOVADO", st.session_state['pdf_ready'], f"Renovacion_{st.session_state['cid_last']}.pdf", "application/pdf")
+            if st.button("Limpiar Notificación"):
+                del st.session_state['pdf_ready']
+                st.rerun()
+
 
     # --- 5. BACKUP ---
     with t5:
