@@ -649,41 +649,69 @@ elif menu == "⚙️ Maestros":
             st.info("No hay contratos activos registrados.")
 
     # --- 5. BACKUP & RESTORE (MOVIDO AQUÍ) ---
-    with t5:
-        st.subheader("💾 Gestión de Respaldo y Recuperación")
-        c_exp, c_imp = st.columns(2)
+    # --- 5. BACKUP & RESTORE (V.7.8 - INCLUYE DEUDAS) ---
+        with t5:
+            st.subheader("💾 Gestión de Respaldo Integral")
+            st.warning("El respaldo ahora incluye: Inmuebles, Unidades, Inquilinos, Contratos y DEUDAS.")
+            c_exp, c_imp = st.columns(2)
         
         with c_exp:
-            st.write("**Exportar base de datos**")
+            st.write("**Exportar base de datos completa**")
             if st.button("Generar Archivo de Respaldo"):
                 try:
                     output = io.BytesIO()
+                    # Traemos TODAS las tablas necesarias
                     df_b = db_query("SELECT * FROM bloques")
                     df_i = db_query("SELECT * FROM inmuebles")
                     df_inq = db_query("SELECT * FROM inquilinos")
                     df_con = db_query("SELECT * FROM contratos")
+                    df_deu = db_query("SELECT * FROM deudas") # <-- AGREGADO
+                    
                     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                         if df_b is not None: df_b.to_excel(writer, sheet_name='Inmuebles', index=False)
                         if df_i is not None: df_i.to_excel(writer, sheet_name='Unidades', index=False)
                         if df_inq is not None: df_inq.to_excel(writer, sheet_name='Inquilinos', index=False)
                         if df_con is not None: df_con.to_excel(writer, sheet_name='Contratos', index=False)
-                    st.download_button("📥 Descargar Excel", output.getvalue(), f"Backup_NL_{date.today()}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                except Exception as e: st.error(f"Error: {e}")
+                        if df_deu is not None: df_deu.to_excel(writer, sheet_name='Deudas', index=False) # <-- AGREGADO
+                    
+                    st.download_button(
+                        label="📥 Descargar Excel de Respaldo",
+                        data=output.getvalue(),
+                        file_name=f"Backup_TOTAL_NL_{date.today()}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                except Exception as e: 
+                    st.error(f"Error al exportar: {e}")
 
         with c_imp:
-            st.write("**Importar desde Excel**")
-            archivo = st.file_uploader("Subir respaldo (.xlsx)", type=["xlsx"])
-            if archivo and st.button("🚀 Iniciar Recuperación"):
+            st.write("**Importar desde Excel (Restauración)**")
+            archivo = st.file_uploader("Subir archivo de respaldo (.xlsx)", type=["xlsx"])
+            if archivo and st.button("🚀 Iniciar Recuperación TOTAL"):
                 try:
+                    # Leemos todas las hojas del Excel
                     dfs = pd.read_excel(archivo, sheet_name=None)
-                    mapping = {'Inmuebles': 'bloques', 'Unidades': 'inmuebles', 'Inquilinos': 'inquilinos', 'Contratos': 'contratos'}
+                    
+                    # Mapeo corregido: Nombre de Hoja -> Nombre de Tabla en DB
+                    mapping = {
+                        'Inmuebles': 'bloques',
+                        'Unidades': 'inmuebles',
+                        'Inquilinos': 'inquilinos',
+                        'Contratos': 'contratos',
+                        'Deudas': 'deudas' # <-- AGREGADO PARA RECUPERAR SALDOS
+                    }
+                    
                     with sqlite3.connect('datos_alquileres.db') as conn:
-                        for sheet, tabla in mapping.items():
-                            if sheet in dfs:
-                                conn.execute(f"DELETE FROM {tabla}") # Limpiamos antes de restaurar
-                                dfs[sheet].to_sql(tabla, conn, if_exists='append', index=False)
-                    st.success("✅ Datos restaurados."); st.rerun()
-                except Exception as e: st.error(f"Error: {e}")
+                        for sheet_name, table_name in mapping.items():
+                            if sheet_name in dfs:
+                                # Limpiamos la tabla antes de insertar para evitar duplicados o conflictos
+                                conn.execute(f"DELETE FROM {table_name}")
+                                # Insertamos los datos recuperados
+                                dfs[sheet_name].to_sql(table_name, conn, if_exists='append', index=False)
+                    
+                    st.success("✅ ¡Base de datos restaurada con éxito, incluyendo saldos y deudas!")
+                    st.rerun()
+                except Exception as e: 
+                    st.error(f"Error al restaurar: {e}. Verifique que el Excel sea un backup válido.")
 
     # --- 6. LISTADO DE ALQUILADOS (NUEVA CONSULTA) ---
     with t6:
