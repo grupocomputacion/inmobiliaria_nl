@@ -235,7 +235,7 @@ with st.sidebar:
 # ==========================================
 # 1. INVENTARIO (V.12.0 - FILTROS AVANZADOS)
 # ==========================================
-elif menu == "🏠 Inventario":
+if menu == "🏠 Inventario":
     st.header("Inventario Global de Unidades")
 
     # --- LÓGICA DE FILTROS (Frontend) ---
