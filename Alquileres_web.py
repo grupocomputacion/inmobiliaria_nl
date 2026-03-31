@@ -530,12 +530,94 @@ elif menu == "🚨 Morosos":
     mora = db_query("SELECT inq.nombre, d.monto_debe FROM deudas d JOIN contratos c ON d.id_contrato=c.id JOIN inquilinos inq ON c.id_inquilino=inq.id WHERE d.pagado=0")
     if mora is not None: st.table(mora)
 
+# ==========================================
+# 4. CONTROL DE CAJA (V.11.2 - INDEPENDIENTE)
+# ==========================================
 elif menu == "📊 Caja":
-    st.header("Caja Mensual")
-    df_c = db_query("SELECT fecha_pago, concepto, monto_pago FROM deudas WHERE pagado=1")
-    if df_c is not None: st.dataframe(df_c)
+    st.header("Historial de Ingresos y Control de Caja")
 
+    # 1. FILTROS DE TIEMPO
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        filtro_caja = st.radio(
+            "Visualizar ingresos de:",
+            ["Hoy", "Este Mes", "Este Año", "Total Histórico"],
+            horizontal=True
+        )
+    
+    # Lógica de fechas para la consulta SQL
+    hoy = date.today()
+    if filtro_caja == "Hoy":
+        condicion = f"d.fecha_pago = '{hoy}'"
+    elif filtro_caja == "Este Mes":
+        condicion = f"strftime('%m', d.fecha_pago) = '{hoy.strftime('%m')}' AND strftime('%Y', d.fecha_pago) = '{hoy.strftime('%Y')}'"
+    elif filtro_caja == "Este Año":
+        condicion = f"strftime('%Y', d.fecha_pago) = '{hoy.strftime('%Y')}'"
+    else:
+        condicion = "d.pagado = 1"
 
+    # 2. CONSULTA A LA BASE DE DATOS
+    query_caja = f"""
+        SELECT 
+            d.id as [ID Reg],
+            inq.nombre as Inquilino,
+            b.nombre || ' - ' || i.tipo as Unidad,
+            d.concepto as Concepto,
+            d.monto_pago as Importe,
+            d.fecha_pago as [Fecha]
+        FROM deudas d
+        JOIN contratos c ON d.id_contrato = c.id
+        JOIN inmuebles i ON c.id_inmueble = i.id
+        JOIN bloques b ON i.id_bloque = b.id
+        JOIN inquilinos inq ON c.id_inquilino = inq.id
+        WHERE d.pagado = 1 AND {condicion}
+        ORDER BY d.fecha_pago DESC
+    """
+    df_caja = db_query(query_caja)
+
+    if df_caja is not None and not df_caja.empty:
+        # 3. MÉTRICAS Y EXPORTACIÓN
+        total_recaudado = df_caja['Importe'].sum()
+        
+        m1, m2 = st.columns([2, 1])
+        m1.metric(f"💰 TOTAL RECAUDADO ({filtro_caja})", f"$ {f_m(total_recaudado)}")
+        
+        # Botón de Exportar a Excel
+        output_excel = io.BytesIO()
+        with pd.ExcelWriter(output_excel, engine='xlsxwriter') as writer:
+            df_caja.to_excel(writer, sheet_name='Caja', index=False)
+        
+        m2.write(" ") # Espaciador
+        m2.download_button(
+            label="📥 Exportar Excel",
+            data=output_excel.getvalue(),
+            file_name=f"Caja_{filtro_caja}_{hoy}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        st.write("---")
+
+        # 4. VISUALIZACIÓN DE LA TABLA (Ocultando ID para estética)
+        st.dataframe(df_caja.drop(columns=['[ID Reg]']), use_container_width=True, hide_index=True)
+
+        # 5. ELIMINAR REGISTRO (CORRECCIÓN)
+        with st.expander("🛠️ Corregir error en Caja (Anular Pago)"):
+            st.warning("Al eliminar un registro, la deuda volverá a figurar como PENDIENTE.")
+            id_borrar = st.selectbox("Seleccione el ID de registro a anular", df_caja['[ID Reg]'].tolist())
+            
+            if st.button("❌ ANULAR PAGO"):
+                # No borramos la fila, solo "des-pagamos" para que el inquilino deba de nuevo
+                db_query(
+                    "UPDATE deudas SET pagado=0, monto_pago=0, fecha_pago=NULL WHERE id=?", 
+                    (id_borrar,), 
+                    commit=True
+                )
+                st.success(f"Registro {id_borrar} anulado. La deuda vuelve a estar pendiente.")
+                st.rerun()
+    else:
+        st.info(f"Sin movimientos registrados para el período: {filtro_caja}")
+
+        
 # ==========================================
 # 6. MAESTROS (V.8.6 - EDICIÓN Y BAJA RESTAURADAS)
 # ==========================================
