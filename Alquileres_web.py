@@ -233,62 +233,78 @@ with st.sidebar:
 # ==========================================
 
 # ==========================================
-# 1. INVENTARIO (V.6.9 - ESTRUCTURA CORREGIDA)
+# 1. INVENTARIO (V.12.0 - FILTROS AVANZADOS)
 # ==========================================
-if menu == "🏠 Inventario":
-    st.header("Estado de Unidades y Disponibilidad")
+elif menu == "🏠 Inventario":
+    st.header("Inventario Global de Unidades")
+
+    # --- LÓGICA DE FILTROS (Frontend) ---
+    c1, c2 = st.columns(2)
     
-    try:
-        # Consulta completa con Disponibilidad
-        query_inv = """
-            SELECT 
-                b.nombre as Inmueble, 
-                i.tipo as Unidad, 
-                i.precio_alquiler as Alquiler, 
-                i.costo_contrato as Contrato, 
-                i.deposito_base as Deposito,
-                CASE WHEN c.activo = 1 THEN '🔴 OCUPADO' ELSE '🟢 LIBRE' END as Estado,
-                CASE 
-                    WHEN c.activo = 1 THEN c.fecha_fin 
-                    ELSE 'DISPONIBLE HOY' 
-                END as [Disponible Desde]
-            FROM inmuebles i 
-            JOIN bloques b ON i.id_bloque = b.id
-            LEFT JOIN contratos c ON i.id = c.id_inmueble AND c.activo = 1
-        """
-        df = db_query(query_inv)
-    except Exception as e:
-        # Si falla (por falta de columnas), hacemos una consulta básica de emergencia
-        query_basica = """
-            SELECT b.nombre as Inmueble, i.tipo as Unidad, i.precio_alquiler as Alquiler
-            FROM inmuebles i JOIN bloques b ON i.id_bloque = b.id
-        """
-        df = db_query(query_basica)
-        st.warning("Nota: Algunas columnas de disponibilidad no están listas. Resetee la base si es necesario.")
+    # 1. Filtro por Inmueble (Edificio)
+    df_bloques_filt = db_query("SELECT nombre FROM bloques")
+    lista_inmuebles = ["Todos"] + df_bloques_filt['nombre'].tolist() if df_bloques_filt is not None else ["Todos"]
+    sel_inmueble = c1.selectbox("🏢 Filtrar por Edificio:", lista_inmuebles)
 
-    # AHORA SÍ: Validamos si hay datos después del bloque try/except
-    if df is not None and not df.empty:
-        c1, c2 = st.columns(2)
-        total_u = len(df)
+    # 2. Filtro por Disponibilidad
+    sel_estado = c2.selectbox("🔑 Filtrar por Disponibilidad:", ["Todos", "Libre", "Ocupado"])
+
+    # --- CONSULTA BASE ---
+    # Traemos las unidades y verificamos si tienen contrato activo
+    query_inv = """
+        SELECT 
+            b.nombre as Inmueble,
+            i.tipo as Unidad,
+            i.precio_alquiler as Valor,
+            CASE 
+                WHEN EXISTS (SELECT 1 FROM contratos WHERE id_inmueble = i.id AND activo = 1) THEN 'Ocupado'
+                ELSE 'Libre'
+            END as Estado
+        FROM inmuebles i
+        JOIN bloques b ON i.id_bloque = b.id
+        WHERE 1=1
+    """
+    
+    # Aplicar filtros SQL dinámicos
+    if sel_inmueble != "Todos":
+        query_inv += f" AND b.nombre = '{sel_inmueble}'"
+    
+    df_inv = db_query(query_inv)
+
+    if df_inv is not None and not df_inv.empty:
+        # Aplicar filtro de estado en el DataFrame
+        if sel_estado != "Todos":
+            df_inv = df_inv[df_inv['Estado'] == sel_estado]
+
+        # --- MÉTRICAS DE ESTADO ---
+        m1, m2, m3 = st.columns(3)
+        total = len(df_inv)
+        ocupados = len(df_inv[df_inv['Estado'] == 'Ocupado'])
+        libres = len(df_inv[df_inv['Estado'] == 'Libre'])
         
-        # Conteo de libres (manejo de error si la columna no existe)
-        if 'Estado' in df.columns:
-            libres_count = len(df[df['Estado'].str.contains('LIBRE', na=False)])
-        else:
-            libres_count = 0
-            
-        c1.metric("Unidades Libres", libres_count)
-        c2.metric("Total Unidades", total_u)
+        m1.metric("Total Unidades", total)
+        m2.metric("Ocupadas", ocupados, delta_color="normal")
+        m3.metric("Libres", libres, delta=libres if libres > 0 else None)
+
+        st.write("---")
+
+        # --- VISUALIZACIÓN ---
+        # Formateamos el precio para que se vea bien
+        df_show = df_inv.copy()
+        df_show['Valor'] = df_show['Valor'].apply(f_m)
         
-        # Formateo de moneda a las columnas que existan
-        for col in ['Alquiler', 'Contrato', 'Deposito']:
-            if col in df.columns:
-                df[col] = df[col].apply(f_m)
-        
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        # Aplicamos colores al texto del estado para que resalte
+        def color_estado(val):
+            color = 'red' if val == 'Ocupado' else 'green'
+            return f'color: {color}; font-weight: bold'
+
+        st.dataframe(
+            df_show.style.applymap(color_estado, subset=['Estado']),
+            use_container_width=True,
+            hide_index=True
+        )
     else:
-        st.info("No hay unidades cargadas en el sistema. Vaya a 'Maestros' para iniciar.")
-
+        st.info("No se encontraron unidades con los filtros seleccionados.")
         
 # ==========================================
 # 2. NUEVO CONTRATO + PDF (V.5.3 - AUTO-REFRESH)
