@@ -6,23 +6,31 @@ import os
 import io
 from fpdf import FPDF
 
-# --- ESTILO CSS PARA EL MENÚ (Sidebar) ---
+# --- ESTILO CSS REFORZADO (V.10.0) ---
 st.markdown("""
     <style>
+        /* Fondo del Sidebar */
         [data-testid="stSidebar"] {
-            background-color: #0E1117;
+            background-color: #1E1E1E !important;
         }
-        [data-testid="stSidebar"] .stMarkdown p {
+        /* Texto de los botones del menú en blanco puro */
+        [data-testid="stSidebar"] .stRadio div label p {
             color: white !important;
-            font-weight: bold;
+            font-size: 1.1rem !important;
+            font-weight: 500 !important;
         }
-        /* Color de los radio buttons del menú */
-        div[data-baseweb="radio"] label {
+        /* Color de los íconos del menú */
+        [data-testid="stSidebar"] .stRadio div label span {
             color: white !important;
-            font-size: 18px !important;
+        }
+        /* Hover: cuando pasas el mouse por encima */
+        [data-testid="stSidebar"] .stRadio div label:hover {
+            background-color: #333333 !important;
+            border-radius: 5px;
         }
     </style>
 """, unsafe_allow_html=True)
+
 
 # 1. DEFINICIÓN DE LA CLASE PDF (FUERA DEL MENÚ)
 class PDFRecibo(FPDF):
@@ -219,9 +227,6 @@ with st.sidebar:
     if os.path.exists("alquileres.jpg"): st.image("alquileres.jpg", use_container_width=True)
     st.info("🚀 SISTEMA NL V.5.0")
     menu = st.radio("MENÚ:", ["🏠 Inventario", "📝 Nuevo Contrato", "💰 Cobranzas", "🚨 Morosos", "📊 Caja", "⚙️ Maestros"])
-    if st.button("🚨 RESET TOTAL (LIMPIAR ERRORES)"):
-        if os.path.exists('datos_alquileres.db'): os.remove('datos_alquileres.db')
-        st.rerun()
 
 # ==========================================
 # 5. SECCIONES
@@ -754,40 +759,48 @@ elif menu == "⚙️ Maestros":
                 st.rerun()
 
 
-    # --- 5. BACKUP & RESET SEGURO (V.9.8) ---
+    # --- 5. BACKUP & RESTORE CORREGIDO ---
     with t5:
-        st.subheader("💾 Gestión de Datos y Seguridad")
+        st.subheader("💾 Centro de Datos")
         c_exp, c_imp, c_res = st.columns(3)
         
         with c_exp:
-            st.write("**Respaldo**")
-            if st.button("Generar Backup"):
-                # ... (tu código de exportación que ya funciona) ...
-                st.success("Backup listo.")
+            st.write("**Exportar**")
+            if st.button("📥 Generar Backup Excel"):
+                # ... (tu código de exportación) ...
+                st.success("Archivo generado.")
 
         with c_imp:
-            st.write("**Restaurar**")
-            archivo = st.file_uploader("Subir .xlsx", type=["xlsx"])
-            # ... (tu código de importación que ya funciona) ...
-
-        with c_res:
-            st.write("**⚠️ Zona de Peligro**")
-            st.error("Borrado Total")
-            codigo_seguridad = st.text_input("Ingrese Código Maestro", type="password", help="Solo el administrador conoce este código.")
-            
-            if st.button("🔥 RESETEAR SISTEMA"):
-                if codigo_seguridad == "3280":
+            st.write("**Importar / Restaurar**")
+            archivo = st.file_uploader("Seleccione el archivo .xlsx", type=["xlsx"])
+            if archivo is not None:
+                # El botón solo aparece si hay un archivo cargado
+                if st.button("🚀 PROCESAR RESTAURACIÓN"):
                     try:
+                        dfs = pd.read_excel(archivo, sheet_name=None)
+                        mapping = {'Inmuebles':'bloques', 'Unidades':'inmuebles', 'Inquilinos':'inquilinos', 'Contratos':'contratos', 'Deudas':'deudas'}
                         with sqlite3.connect('datos_alquileres.db') as conn:
-                            tablas = ['bloques', 'inmuebles', 'inquilinos', 'contratos', 'deudas']
-                            for t in tablas:
-                                conn.execute(f"DELETE FROM {t}")
-                        st.success("SISTEMA RESETEADO. Base de datos vacía.")
+                            for h, t in mapping.items():
+                                if h in dfs:
+                                    conn.execute(f"DELETE FROM {t}")
+                                    dfs[h].to_sql(t, conn, if_exists='append', index=False)
+                        st.success("✅ Datos restaurados correctamente.")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error: {e}")
+
+        with c_res:
+            st.write("**⚠️ Borrado Total**")
+            cod_m = st.text_input("Código Maestro", type="password")
+            if st.button("🔥 RESET SISTEMA"):
+                if cod_m == "3280":
+                    with sqlite3.connect('datos_alquileres.db') as conn:
+                        for t in ['bloques','inmuebles','inquilinos','contratos','deudas']:
+                            conn.execute(f"DELETE FROM {t}")
+                    st.success("Base de datos vaciada.")
+                    st.rerun()
                 else:
-                    st.warning("Código incorrecto. Acción cancelada.")
+                    st.error("Código Incorrecto")
 
     # --- 6. LISTADO DE ALQUILADOS ---
     with t6:
