@@ -324,81 +324,102 @@ if menu == "🏠 Inventario":
 
         
 # ==========================================
-# 2. NUEVO CONTRATO + PDF (V.5.3 - AUTO-REFRESH)
+# 2. NUEVO CONTRATO + PDF (V.14.0 - FINAL)
 # ==========================================
 elif menu == "📝 Nuevo Contrato":
     st.header("Formalización de Contrato y PDF")
     
+    # 1. CARGA DE DATOS MAESTROS
     u_df = db_query("""
         SELECT i.id, b.nombre || ' - ' || i.tipo as ref, b.direccion, b.barrio, b.localidad, 
                i.tipo, i.precio_alquiler, i.costo_contrato, i.deposito_base 
         FROM inmuebles i JOIN bloques b ON i.id_bloque=b.id
     """)
-    i_df = db_query("SELECT * FROM inquilinos")
+    i_df = db_query("SELECT id, nombre, dni, celular FROM inquilinos")
     
     if u_df is not None and i_df is not None and not u_df.empty:
-        # --- PASO 1: SELECCIÓN FUERA DEL FORM ---
-        # Esto permite que al cambiar la unidad, Streamlit recargue la página y actualice sel_u
-        st.subheader("1. Selección de Unidad")
-        uid = st.selectbox("Elija la Unidad para el contrato", u_df['id'], 
-                           format_func=lambda x: u_df[u_df['id']==x]['ref'].values[0])
+        # --- PASO 1: SELECCIÓN (Fuera del Form para reactividad) ---
+        st.subheader("1. Selección de Unidad e Inquilino")
+        c_sel1, c_sel2 = st.columns(2)
         
-        # Obtenemos los datos actualizados de la unidad seleccionada
+        uid = c_sel1.selectbox("Seleccione Unidad", u_df['id'], 
+                               format_func=lambda x: u_df[u_df['id']==x]['ref'].values[0])
+        
+        iid = c_sel2.selectbox("Seleccione Inquilino", i_df['id'], 
+                               format_func=lambda x: i_df[i_df['id']==x]['nombre'].values[0])
+        
+        # Obtenemos datos de la unidad elegida para precargar montos
         sel_u = u_df[u_df['id'] == uid].iloc[0]
-        
+        sel_inq = i_df[i_df['id'] == iid].iloc[0]
+
         st.write("---")
-        st.subheader("2. Datos del Contrato")
         
-        # --- PASO 2: FORMULARIO PARA DATOS VARIABLES ---
-        with st.form("f_contrato_v53"):
+        # --- PASO 2: FORMULARIO DE CONTRATO ---
+        st.subheader("2. Condiciones del Contrato")
+        with st.form("f_contrato_final", clear_on_submit=True):
             col1, col2 = st.columns(2)
             
-            # El Inquilino puede ir dentro porque no dispara cambios en otros campos
-            iid = col1.selectbox("Inquilino", i_df['id'], 
-                                 format_func=lambda x: i_df[i_df['id']==x]['nombre'].values[0])
+            fini = col1.date_input("Fecha de Inicio", date.today())
+            meses = col2.number_input("Duración (Meses)", min_value=1, max_value=60, value=6)
             
-            fini = col2.date_input("Fecha Inicio", date.today())
-            meses = col1.number_input("Cantidad de Meses", min_value=1, max_value=60, value=3)
-            
-            st.write("**Montos sugeridos (puede editarlos):**")
+            st.markdown("**Valores Económicos (Editables):**")
             c_m1, c_m2, c_m3 = st.columns(3)
-            
-            # Ahora estos inputs toman el valor de sel_u actualizado
             ma = c_m1.text_input("Alquiler Mensual", f_m(sel_u['precio_alquiler']))
             md = c_m2.text_input("Depósito Garantía", f_m(sel_u['deposito_base']))
             mc = c_m3.text_input("Gasto Administrativo", f_m(sel_u['costo_contrato']))
             
-            if st.form_submit_button("GRABAR Y GENERAR PDF"):
-                f_vence = fini + timedelta(days=meses * 30)
+            # BOTÓN DE GRABAR
+            if st.form_submit_button("✅ GRABAR Y GENERAR PDF"):
+                # A. CONTROL ANTI-DUPLICADOS (Verificamos si sigue libre)
+                check = db_query("SELECT id FROM contratos WHERE id_inmueble=? AND activo=1", (uid,))
                 
-                # Grabar Contrato
-                cid = db_query("""INSERT INTO contratos (id_inmueble, id_inquilino, fecha_inicio, fecha_fin, monto_alquiler) 
-                                 VALUES (?,?,?,?,?)""", (uid, iid, fini, f_vence, cl(ma)), commit=True)
-                
-                # Generar deudas iniciales
-                db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe) VALUES (?, 'Mes 1 Alquiler', ?)", (cid, cl(ma)), commit=True)
-                db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe) VALUES (?, 'Garantía/Depósito', ?)", (cid, cl(md)), commit=True)
-                db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe) VALUES (?, 'Gastos Administrativos', ?)", (cid, cl(mc)), commit=True)
-                
-                try:
-                    pdf_bytes = generar_pdf_v5(sel_u, i_df[i_df['id']==iid].iloc[0], fini, ma, md, mc)
-                    st.session_state['pdf_ready'] = bytes(pdf_bytes) 
-                    st.session_state['cid_last'] = cid
-                    st.success(f"Contrato {cid} grabado. Vence el {f_vence.strftime('%d/%m/%Y')}")
-                    st.rerun() # Forzamos recarga para mostrar el botón de descarga
-                except Exception as e:
-                    st.error(f"Error al generar PDF: {e}")
+                if check is not None and not check.empty:
+                    st.error("🚫 ERROR: Esta unidad ya fue alquilada recientemente. Operación cancelada.")
+                else:
+                    try:
+                        # B. CÁLCULO DE FIN Y GRABACIÓN
+                        f_vence = fini + timedelta(days=meses * 30)
+                        
+                        nuevo_cid = db_query("""
+                            INSERT INTO contratos (id_inmueble, id_inquilino, fecha_inicio, fecha_fin, monto_alquiler, activo) 
+                            VALUES (?, ?, ?, ?, ?, 1)
+                        """, (int(uid), int(iid), fini, f_vence, cl(ma)), commit=True)
 
-        # Botón de descarga (fuera del form)
-        if 'pdf_ready' in st.session_state:
-            st.write("---")
-            st.download_button("📥 DESCARGAR CONTRATO PDF", 
-                               st.session_state['pdf_ready'], 
-                               f"Contrato_NL_{st.session_state.get('cid_last', 'nuevo')}.pdf", 
-                               "application/pdf")
+                        # C. GENERACIÓN DE DEUDAS INICIALES
+                        db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe, pagado) VALUES (?, 'Mes 1 Alquiler', ?, 0)", (nuevo_cid, cl(ma)), commit=True)
+                        db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe, pagado) VALUES (?, 'Garantía/Depósito', ?, 0)", (nuevo_cid, cl(md)), commit=True)
+                        db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe, pagado) VALUES (?, 'Gastos Administrativos', ?, 0)", (nuevo_cid, cl(mc)), commit=True)
+
+                        # D. PREPARACIÓN DEL PDF (Persistencia en Session State)
+                        pdf_bytes = generar_pdf_v5(sel_u, sel_inq, fini, ma, md, mc)
+                        st.session_state['pdf_contrato'] = bytes(pdf_bytes)
+                        st.session_state['nro_contrato'] = nuevo_cid
+                        
+                        st.success(f"🎉 Contrato #{nuevo_cid} registrado con éxito.")
+                        st.rerun() # Limpia el form y actualiza la vista
+
+                    except Exception as e:
+                        st.error(f"Error técnico al grabar: {e}")
+
+    # --- PASO 3: DESCARGA (Fuera del form para que persista) ---
+    if 'pdf_contrato' in st.session_state:
+        st.write("---")
+        st.subheader("📄 Descarga de Documento")
+        c_d1, c_d2 = st.columns([2, 1])
+        
+        c_d1.download_button(
+            label=f"📥 DESCARGAR CONTRATO #{st.session_state.get('nro_contrato')}",
+            data=st.session_state['pdf_contrato'],
+            file_name=f"Contrato_NL_{st.session_state.get('nro_contrato')}.pdf",
+            mime="application/pdf"
+        )
+        
+        if c_d2.button("Limpiar Pantalla"):
+            del st.session_state['pdf_contrato']
+            st.rerun()
+
     else:
-        st.warning("Debe cargar Inmuebles, Unidades e Inquilinos en 'Maestros' primero.")
-
+        st.warning("Debe tener Unidades e Inquilinos cargados en 'Maestros' para operar.")
 
 # ==========================================
 # 3. COBRANZAS (V.8.1 - TOTAL RESET)
@@ -555,6 +576,39 @@ elif menu == "💰 Cobranzas":
 
     elif deu_pend is None or deu_pend.empty:
         st.success("✅ No hay deudas pendientes.")
+
+# --- FUNCIONALIDAD: ELIMINAR DEUDA ERRÓNEA ---
+    st.write("---")
+    with st.expander("🗑️ Zona de Corrección: Eliminar Deuda Errónea"):
+        st.info("Use esta opción solo para borrar deudas generadas por error. No la use para registrar cobros.")
+        
+        # Obtenemos la lista de deudas PENDIENTES para elegir cuál borrar
+        df_pendientes = db_query("""
+            SELECT d.id, inq.nombre || ' - ' || d.concepto as Ref
+            FROM deudas d
+            JOIN contratos c ON d.id_contrato = c.id
+            JOIN inquilinos inq ON c.id_inquilino = inq.id
+            WHERE d.pagado = 0
+        """)
+        
+        if df_pendientes is not None and not df_pendientes.empty:
+            sel_deuda_borrar = st.selectbox(
+                "Seleccione la deuda a ELIMINAR PERMANENTEMENTE:",
+                df_pendientes['id'].tolist(),
+                format_func=lambda x: df_pendientes[df_pendientes['id']==x]['Ref'].values[0]
+            )
+            
+            confirmar_borrado = st.checkbox("Confirmo que deseo eliminar este registro permanentemente.")
+            
+            if st.button("❌ ELIMINAR REGISTRO"):
+                if confirmar_borrado:
+                    db_query("DELETE FROM deudas WHERE id=?", (sel_deuda_borrar,), commit=True)
+                    st.success("Registro eliminado de la base de datos.")
+                    st.rerun()
+                else:
+                    st.warning("Debe marcar el cuadro de confirmación para proceder.")
+        else:
+            st.write("No hay deudas pendientes registradas.")        
         
 # ==========================================
 
