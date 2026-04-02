@@ -326,7 +326,7 @@ def generar_pdf_lote(datos_pago, datos_comprador, datos_lote):
 with st.sidebar:
     if os.path.exists("alquileres.jpg"): st.image("alquileres.jpg", use_container_width=True)
     st.info("🚀 SISTEMA NL V.5.0")
-    menu = st.radio("MENÚ:", ["🏠 Inventario", "📝 Nuevo Contrato", "💰 Cobranzas", "🚨 Morosos", "📊 Caja", "⚙️ Maestros"])
+    menu = st.radio("MENÚ:", ["🏠 Inventario", "📝 Nuevo Contrato", "💰 Cobranzas", "🚨 Morosos", "📊 Caja", "⚙️ Maestros", "🌳 Lotes"])
 
 # ==========================================
 # 5. SECCIONES
