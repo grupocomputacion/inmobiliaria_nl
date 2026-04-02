@@ -115,7 +115,7 @@ def mantenimiento_base():
         cur.execute("CREATE TABLE IF NOT EXISTS inquilinos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT)")
         cur.execute("CREATE TABLE IF NOT EXISTS inmuebles (id INTEGER PRIMARY KEY AUTOINCREMENT, id_bloque INTEGER, tipo TEXT)")
         cur.execute("CREATE TABLE IF NOT EXISTS contratos (id INTEGER PRIMARY KEY AUTOINCREMENT, id_inmueble INTEGER, id_inquilino INTEGER)")
-        cur.execute("CREATE TABLE IF NOT EXISTS deudas (id INTEGER PRIMARY KEY AUTOINCREMENT, id_contrato INTEGER, concepto TEXT)")
+        cur.execute("CREATE TABLE IF NOT EXISTS deudas (id INTEGER PRIMARY KEY AUTOINCREMENT, id_contrato INTEGER, concepto TEXT)")`
 
         # 2. DICCIONARIO DE COLUMNAS NECESARIAS (El 'Seguro de Vida' de los datos)
         # Formato: (Tabla, Columna, Tipo)
@@ -149,6 +149,67 @@ def mantenimiento_base():
                 # Si la columna ya existe, SQLite da error y simplemente la salteamos
                 pass
         conn.commit()
+
+# ==========================================
+# TABLAS PARA GESTIÓN DE LOTES (NUEVAS)
+# ==========================================
+db_query("""CREATE TABLE IF NOT EXISTS desarrollos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT,
+    ubicacion TEXT,
+    localidad TEXT
+)""", commit=True)
+
+db_query("""CREATE TABLE IF NOT EXISTS lotes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_desarrollo INTEGER,
+    manzana TEXT,
+    nro_lote TEXT,
+    metros_cuadrados REAL,
+    frente REAL,
+    fondo REAL,
+    servicios TEXT,
+    observaciones TEXT,
+    precio_contado REAL,
+    precio_financiado REAL,
+    estado TEXT DEFAULT 'Libre',
+    FOREIGN KEY(id_desarrollo) REFERENCES desarrollos(id)
+)""", commit=True)
+
+db_query("""CREATE TABLE IF NOT EXISTS compradores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT,
+    dni_cuit TEXT,
+    celular TEXT,
+    domicilio TEXT,
+    email TEXT
+)""", commit=True)
+
+db_query("""CREATE TABLE IF NOT EXISTS ventas_lotes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_lote INTEGER,
+    id_comprador INTEGER,
+    fecha_venta DATE,
+    monto_total_usd REAL,
+    entrega_usd REAL,
+    cantidad_cuotas INTEGER,
+    monto_cuota_usd REAL,
+    estado TEXT DEFAULT 'Activa',
+    FOREIGN KEY(id_lote) REFERENCES lotes(id),
+    FOREIGN KEY(id_comprador) REFERENCES compradores(id)
+)""", commit=True)
+
+db_query("""CREATE TABLE IF NOT EXISTS cuotas_lotes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_venta INTEGER,
+    nro_cuota INTEGER,
+    monto_usd REAL,
+    fecha_vencimiento DATE,
+    pagado INTEGER DEFAULT 0,
+    monto_pagado_usd REAL DEFAULT 0,
+    fecha_pago DATE,
+    FOREIGN KEY(id_venta) REFERENCES ventas_lotes(id)
+)""", commit=True)        
 
 # Ejecutar SIEMPRE al iniciar
 mantenimiento_base()
@@ -218,6 +279,45 @@ En prueba de conformidad, se firman dos ejemplares de un mismo tenor en la ciuda
     
 # ELIMINAMOS el .encode('latin-1') del final porque output(dest='S') ya entrega bytes
     return pdf.output(dest='S')
+
+def generar_pdf_lote(datos_pago, datos_comprador, datos_lote):
+    pdf = FPDF()
+    pdf.add_page()
+    
+    # Encabezado
+    if os.path.exists("alquileres.jpg"):
+        pdf.image("alquileres.jpg", 10, 8, 33)
+    
+    pdf.set_font('Arial', 'B', 15)
+    pdf.cell(80)
+    pdf.cell(30, 10, 'RECIBO DE PAGO - LOTES', 0, 0, 'C')
+    pdf.ln(20)
+    
+    # Datos de la Empresa y Fecha
+    pdf.set_font('Arial', '', 10)
+    pdf.cell(100, 7, "NL INMOBILIARIA - GESTIÓN DE LOTEO", 0, 0, 'L')
+    pdf.cell(90, 7, f"Fecha: {date.today().strftime('%d/%m/%Y')}", 0, 1, 'R')
+    pdf.ln(10)
+    
+    # Cuerpo del Recibo
+    pdf.set_font('Arial', 'B', 11)
+    pdf.cell(0, 8, f"RECIBIMOS DE: {datos_comprador['nombre'].upper()}", 1, 1, 'L')
+    pdf.ln(5)
+    
+    pdf.set_font('Arial', '', 11)
+    pdf.cell(0, 8, f"La suma de: U$D {f_m(datos_pago['monto'])} (Dólares Estadounidenses)", 0, 1, 'L')
+    pdf.cell(0, 8, f"En concepto de: {datos_pago['concepto']}", 0, 1, 'L')
+    pdf.cell(0, 8, f"Referencia: Manzana {datos_lote['manzana']} - Lote {datos_lote['nro_lote']}", 0, 1, 'L')
+    pdf.ln(15)
+    
+    # Firma
+    pdf.ln(20)
+    pdf.cell(110)
+    pdf.cell(80, 7, "_______________________________", 0, 1, 'C')
+    pdf.cell(110)
+    pdf.cell(80, 7, "Firma Autorizada", 0, 1, 'C')
+
+    return pdf.output(dest='S').encode('latin-1')
 
 
 # ==========================================
@@ -1027,6 +1127,157 @@ elif menu == "⚙️ Maestros":
                     if db_query("SELECT id FROM deudas WHERE id_contrato=? AND concepto=?", (int(c['id']), conc)).empty:
                         db_query("INSERT INTO deudas (id_contrato, concepto, monto_debe, monto_pago, pagado) VALUES (?,?,?,0,0)", (int(c['id']), conc, int(c['monto_alquiler'])), commit=True)
                 st.success("Cargos generados.")
+
+# ==========================================
+# 7. GESTIÓN DE LOTES (V.1.0 - PARALELA)
+# ==========================================
+elif menu == "🌳 Lotes":
+    st.header("Gestión y Comercialización de Lotes (U$D)")
+    
+    t_l1, t_l2, t_l3, t_l4, t_l5 = st.tabs([
+        "🏗️ Desarrollos", "📏 Inventario Lotes", "👤 Compradores", "🤝 Ventas", "💰 Cuotas y Cobros"
+    ])
+
+    # --- 1. DESARROLLOS (LUGARES) ---
+    with t_l1:
+        st.subheader("Ubicaciones de Loteos")
+        with st.form("f_desarrollo", clear_on_submit=True):
+            n = st.text_input("Nombre del Desarrollo (Ej: Los Olivos)")
+            u = st.text_input("Ubicación / Ruta")
+            l = st.text_input("Localidad")
+            if st.form_submit_button("Guardar Lugar"):
+                db_query("INSERT INTO desarrollos (nombre, ubicacion, localidad) VALUES (?,?,?)", (n, u, l), commit=True)
+                st.rerun()
+        
+        df_des = db_query("SELECT id, nombre, ubicacion, localidad FROM desarrollos")
+        if df_des is not None: st.dataframe(df_des.drop(columns=['id']), hide_index=True)
+
+    # --- 2. INVENTARIO DE LOTES ---
+    with t_l2:
+        st.subheader("Carga de Lotes")
+        df_d_ref = db_query("SELECT id, nombre FROM desarrollos")
+        if df_d_ref is not None and not df_d_ref.empty:
+            with st.expander("➕ Cargar Nuevo Lote"):
+                with st.form("f_lote_alta", clear_on_submit=True):
+                    id_d = st.selectbox("Desarrollo", df_d_ref['id'], format_func=lambda x: df_d_ref[df_d_ref['id']==x]['nombre'].values[0])
+                    c1, c2 = st.columns(2)
+                    mz = c1.text_input("Manzana")
+                    lt = c2.text_input("Nro Lote")
+                    m2 = c1.number_input("Metros Cuadrados total", min_value=0.0)
+                    fre = c2.number_input("Metros de Frente", min_value=0.0)
+                    fon = c1.number_input("Metros de Fondo", min_value=0.0)
+                    serv = st.multiselect("Servicios", ["LUZ", "AGUA", "INTERNET", "GAS"])
+                    obs = st.text_area("Observaciones")
+                    p_cont = st.number_input("Precio Contado (U$D)", min_value=0.0)
+                    p_fin = st.number_input("Precio Financiado (U$D)", min_value=0.0)
+                    if st.form_submit_button("Guardar Lote"):
+                        db_query("""INSERT INTO lotes (id_desarrollo, manzana, nro_lote, metros_cuadrados, frente, fondo, servicios, observaciones, precio_contado, precio_financiado) 
+                                 VALUES (?,?,?,?,?,?,?,?,?,?)""", (id_d, mz, lt, m2, fre, fon, ", ".join(serv), obs, p_cont, p_fin), commit=True)
+                        st.rerun()
+            
+            df_lotes = db_query("""SELECT l.id, d.nombre as Desarrollo, l.manzana as Mz, l.nro_lote as Lote, 
+                                 l.metros_cuadrados as M2, l.estado as Estado, l.precio_contado as [Contado U$D]
+                                 FROM lotes l JOIN desarrollos d ON l.id_desarrollo = d.id""")
+            if df_lotes is not None: st.dataframe(df_lotes.drop(columns=['id']), hide_index=True)
+
+    # --- 3. COMPRADORES ---
+    with t_l3:
+        st.subheader("Gestión de Compradores")
+        with st.form("f_comp"):
+            c1, c2 = st.columns(2)
+            nom = c1.text_input("Nombre Completo")
+            doc = c1.text_input("DNI / CUIT")
+            cel = c2.text_input("Celular")
+            dom = c2.text_input("Domicilio")
+            mail = st.text_input("Email")
+            if st.form_submit_button("Registrar Comprador"):
+                db_query("INSERT INTO compradores (nombre, dni_cuit, celular, domicilio, email) VALUES (?,?,?,?,?)", (nom, doc, cel, dom, mail), commit=True)
+                st.rerun()
+
+    # --- 4. VENTAS ---
+    with t_l4:
+        st.subheader("Registrar Venta de Lote")
+        lotes_libres = db_query("SELECT id, manzana || '-' || nro_lote as ref FROM lotes WHERE estado='Libre'")
+        comps = db_query("SELECT id, nombre FROM compradores")
+        
+        if lotes_libres is not None and comps is not None:
+            with st.form("f_venta_lote"):
+                id_l = st.selectbox("Lote a vender", lotes_libres['id'], format_func=lambda x: lotes_libres[lotes_libres['id']==x]['ref'].values[0])
+                id_c = st.selectbox("Comprador", comps['id'], format_func=lambda x: comps[comps['id']==x]['nombre'].values[0])
+                c1, c2, c3 = st.columns(3)
+                tot_usd = c1.number_input("Precio Venta Total (U$D)")
+                ent_usd = c2.number_input("Entrega Inicial (U$D)")
+                cuotas = c3.number_input("Cantidad de Cuotas", min_value=0, value=12)
+                f_v = st.date_input("Fecha de Operación")
+                
+                if st.form_submit_button("🤝 CONFIRMAR VENTA"):
+                    # 1. Registrar Venta
+                    monto_cuota = (tot_usd - ent_usd) / cuotas if cuotas > 0 else 0
+                    v_id = db_query("""INSERT INTO ventas_lotes (id_lote, id_comprador, fecha_venta, monto_total_usd, entrega_usd, cantidad_cuotas, monto_cuota_usd) 
+                                    VALUES (?,?,?,?,?,?,?)""", (id_l, id_c, f_v, tot_usd, ent_usd, cuotas, monto_cuota), commit=True)
+                    
+                    # 2. Generar Cuotas
+                    for i in range(1, cuotas + 1):
+                        venc = f_v + timedelta(days=30 * i)
+                        db_query("INSERT INTO cuotas_lotes (id_venta, nro_cuota, monto_usd, fecha_vencimiento) VALUES (?,?,?,?)", (v_id, i, monto_cuota, venc), commit=True)
+                    
+                    # 3. Marcar lote como vendido
+                    db_query(f"UPDATE lotes SET estado='Vendido' WHERE id={id_l}", commit=True)
+                    st.success("Venta registrada y plan de cuotas generado.")
+                    st.rerun()
+
+# --- 5. COBRANZAS Y RECIBOS (V.1.2 - CON PDF U$D) ---
+    with t_l5:
+        st.subheader("Cobranza de Cuotas y Entregas (U$D)")
+        
+        query_pend = """
+            SELECT cl.id, co.nombre as Comprador, l.manzana, l.nro_lote, 
+                   cl.nro_cuota, cl.monto_usd, vl.id_lote, vl.id_comprador
+            FROM cuotas_lotes cl
+            JOIN ventas_lotes vl ON cl.id_venta = vl.id
+            JOIN compradores co ON vl.id_comprador = co.id
+            JOIN lotes l ON vl.id_lote = l.id
+            WHERE cl.pagado = 0
+        """
+        df_p = db_query(query_pend)
+        
+        if df_p is not None and not df_p.empty:
+            with st.form("f_cobro_lote_pdf"):
+                sel_id = st.selectbox("Seleccione cuota a cobrar", df_p['id'].tolist(), 
+                                      format_func=lambda x: f"{df_p[df_p['id']==x]['Comprador'].values[0]} - Mz {df_p[df_p['id']==x]['manzana'].values[0]} Lote {df_p[df_p['id']==x]['nro_lote'].values[0]} - Cuota {df_p[df_p['id']==x]['nro_cuota'].values[0]}")
+                
+                row_p = df_p[df_p['id'] == sel_id].iloc[0]
+                m_cobro = st.number_input("Confirmar Monto U$D", value=float(row_p['monto_usd']))
+                
+                if st.form_submit_button("✅ COBRAR Y GENERAR RECIBO"):
+                    # 1. Update en DB
+                    db_query("UPDATE cuotas_lotes SET pagado=1, monto_pagado_usd=?, fecha_pago=? WHERE id=?", (m_cobro, date.today(), sel_id), commit=True)
+                    
+                    # 2. Datos para el PDF
+                    datos_p = {'monto': m_cobro, 'concepto': f"Cuota Nro {row_p['nro_cuota']}"}
+                    datos_c = {'nombre': row_p['Comprador']}
+                    datos_l = {'manzana': row_p['manzana'], 'nro_lote': row_p['nro_lote']}
+                    
+                    # 3. Generar y persistir
+                    pdf_lote = generar_pdf_lote(datos_p, datos_c, datos_l)
+                    st.session_state['pdf_lote_ready'] = bytes(pdf_lote)
+                    st.success("¡Cobro registrado con éxito!")
+                    st.rerun()
+
+        # Botón de descarga fuera del form
+        if 'pdf_lote_ready' in st.session_state:
+            st.write("---")
+            st.download_button(
+                label="📥 DESCARGAR RECIBO U$D",
+                data=st.session_state['pdf_lote_ready'],
+                file_name=f"Recibo_Lote_{date.today()}.pdf",
+                mime="application/pdf"
+            )
+            if st.button("Limpiar"):
+                del st.session_state['pdf_lote_ready']
+                st.rerun()
+
+
 # ==========================================
 # 1. INVENTARIO (V.6.8 - VISTA LIMPIA)
 # ==========================================
