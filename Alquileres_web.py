@@ -1129,70 +1129,127 @@ elif menu == "⚙️ Maestros":
                 st.success("Cargos generados.")
 
 # ==========================================
-# 7. GESTIÓN DE LOTES (V.1.0 - PARALELA)
+# 7. GESTIÓN DE LOTES (V.2.0 - CRUD COMPLETO)
 # ==========================================
 elif menu == "🌳 Lotes":
     st.header("Gestión y Comercialización de Lotes (U$D)")
     
+    # Crear carpeta de fotos si no existe
+    if not os.path.exists("fotos_lotes"):
+        os.makedirs("fotos_lotes")
+
     t_l1, t_l2, t_l3, t_l4, t_l5 = st.tabs([
         "🏗️ Desarrollos", "📏 Inventario Lotes", "👤 Compradores", "🤝 Ventas", "💰 Cuotas y Cobros"
     ])
 
-    # --- 1. DESARROLLOS (LUGARES) ---
+    # --- 1. DESARROLLOS (ABM) ---
     with t_l1:
         st.subheader("Ubicaciones de Loteos")
-        with st.form("f_desarrollo", clear_on_submit=True):
-            n = st.text_input("Nombre del Desarrollo (Ej: Los Olivos)")
-            u = st.text_input("Ubicación / Ruta")
-            l = st.text_input("Localidad")
-            if st.form_submit_button("Guardar Lugar"):
-                db_query("INSERT INTO desarrollos (nombre, ubicacion, localidad) VALUES (?,?,?)", (n, u, l), commit=True)
-                st.rerun()
+        with st.expander("➕ Nuevo / Editar Desarrollo"):
+            with st.form("f_des_edit", clear_on_submit=True):
+                id_e = st.number_input("ID para editar (0 para nuevo)", min_value=0, value=0)
+                n = st.text_input("Nombre del Desarrollo")
+                u = st.text_input("Ubicación / Ruta")
+                l = st.text_input("Localidad")
+                if st.form_submit_button("Guardar Desarrollo"):
+                    if id_e == 0:
+                        db_query("INSERT INTO desarrollos (nombre, ubicacion, localidad) VALUES (?,?,?)", (n, u, l), commit=True)
+                    else:
+                        db_query("UPDATE desarrollos SET nombre=?, ubicacion=?, localidad=? WHERE id=?", (n, u, l, id_e), commit=True)
+                    st.rerun()
         
-        df_des = db_query("SELECT id, nombre, ubicacion, localidad FROM desarrollos")
-        if df_des is not None: st.dataframe(df_des.drop(columns=['id']), hide_index=True)
+        df_des = db_query("SELECT * FROM desarrollos")
+        if df_des is not None:
+            st.dataframe(df_des, hide_index=True, use_container_width=True)
+            id_del = st.number_input("ID Desarrollo a eliminar", min_value=0, key="del_des")
+            if st.button("🗑️ Eliminar Desarrollo"):
+                db_query(f"DELETE FROM desarrollos WHERE id={id_del}", commit=True)
+                st.rerun()
 
-    # --- 2. INVENTARIO DE LOTES ---
+    # --- 2. INVENTARIO DE LOTES (CON IMÁGENES Y EDICIÓN) ---
     with t_l2:
-        st.subheader("Carga de Lotes")
+        st.subheader("Gestión de Lotes e Imágenes")
+        
         df_d_ref = db_query("SELECT id, nombre FROM desarrollos")
         if df_d_ref is not None and not df_d_ref.empty:
-            with st.expander("➕ Cargar Nuevo Lote"):
-                with st.form("f_lote_alta", clear_on_submit=True):
+            with st.expander("🛠️ Panel de Carga y Edición de Lote"):
+                with st.form("f_lote_abm", clear_on_submit=True):
+                    id_l_e = st.number_input("ID Lote para editar (0 para nuevo)", min_value=0, value=0)
                     id_d = st.selectbox("Desarrollo", df_d_ref['id'], format_func=lambda x: df_d_ref[df_d_ref['id']==x]['nombre'].values[0])
                     c1, c2 = st.columns(2)
                     mz = c1.text_input("Manzana")
                     lt = c2.text_input("Nro Lote")
-                    m2 = c1.number_input("Metros Cuadrados total", min_value=0.0)
-                    fre = c2.number_input("Metros de Frente", min_value=0.0)
-                    fon = c1.number_input("Metros de Fondo", min_value=0.0)
+                    m2 = c1.number_input("M2 Totales", min_value=0.0)
+                    fre = c2.number_input("Metros Frente", min_value=0.0)
+                    fon = c1.number_input("Metros Fondo", min_value=0.0)
                     serv = st.multiselect("Servicios", ["LUZ", "AGUA", "INTERNET", "GAS"])
-                    obs = st.text_area("Observaciones")
                     p_cont = st.number_input("Precio Contado (U$D)", min_value=0.0)
                     p_fin = st.number_input("Precio Financiado (U$D)", min_value=0.0)
-                    if st.form_submit_button("Guardar Lote"):
-                        db_query("""INSERT INTO lotes (id_desarrollo, manzana, nro_lote, metros_cuadrados, frente, fondo, servicios, observaciones, precio_contado, precio_financiado) 
-                                 VALUES (?,?,?,?,?,?,?,?,?,?)""", (id_d, mz, lt, m2, fre, fon, ", ".join(serv), obs, p_cont, p_fin), commit=True)
+                    obs = st.text_area("Observaciones")
+                    
+                    fotos = st.file_uploader("Subir Imágenes del Lote", accept_multiple_files=True, type=['jpg','png','jpeg'])
+                    
+                    if st.form_submit_button("💾 GUARDAR LOTE"):
+                        serv_str = ", ".join(serv)
+                        if id_l_e == 0:
+                            new_id = db_query("""INSERT INTO lotes (id_desarrollo, manzana, nro_lote, metros_cuadrados, frente, fondo, servicios, observaciones, precio_contado, precio_financiado) 
+                                             VALUES (?,?,?,?,?,?,?,?,?,?)""", (id_d, mz, lt, m2, fre, fon, serv_str, obs, p_cont, p_fin), commit=True)
+                            target_id = new_id
+                        else:
+                            db_query("""UPDATE lotes SET id_desarrollo=?, manzana=?, nro_lote=?, metros_cuadrados=?, frente=?, fondo=?, servicios=?, observaciones=?, precio_contado=?, precio_financiado=? 
+                                     WHERE id=?""", (id_d, mz, lt, m2, fre, fon, serv_str, obs, p_cont, p_fin, id_l_e), commit=True)
+                            target_id = id_l_e
+                        
+                        # Guardar fotos físicamente
+                        if fotos:
+                            for i, foto in enumerate(fotos):
+                                with open(f"fotos_lotes/lote_{target_id}_{i}.jpg", "wb") as f:
+                                    f.write(foto.getbuffer())
+                        st.success(f"Lote {target_id} guardado.")
                         st.rerun()
-            
-            df_lotes = db_query("""SELECT l.id, d.nombre as Desarrollo, l.manzana as Mz, l.nro_lote as Lote, 
-                                 l.metros_cuadrados as M2, l.estado as Estado, l.precio_contado as [Contado U$D]
-                                 FROM lotes l JOIN desarrollos d ON l.id_desarrollo = d.id""")
-            if df_lotes is not None: st.dataframe(df_lotes.drop(columns=['id']), hide_index=True)
 
-    # --- 3. COMPRADORES ---
+            # --- Visualización de Lotes ---
+            df_lotes = db_query("""SELECT l.id, d.nombre as Desarrollo, l.manzana as Mz, l.nro_lote as Lote, 
+                                 l.estado as Estado, l.precio_contado as [U$D]
+                                 FROM lotes l JOIN desarrollos d ON l.id_desarrollo = d.id""")
+            
+            if df_lotes is not None:
+                st.dataframe(df_lotes, use_container_width=True, hide_index=True)
+                
+                # Visualizador de Fotos
+                sel_v = st.selectbox("Ver Fotos de Lote ID:", df_lotes['id'].tolist())
+                galeria = [f"fotos_lotes/{img}" for img in os.listdir("fotos_lotes") if img.startswith(f"lote_{sel_v}_")]
+                if galeria:
+                    st.image(galeria, width=200, caption=[f"Foto {i+1}" for i in range(len(galeria))])
+                
+                if st.button("🗑️ ELIMINAR LOTE SELECCIONADO"):
+                    db_query(f"DELETE FROM lotes WHERE id={sel_v}", commit=True)
+                    st.rerun()
+
+    # --- 3. COMPRADORES (ABM) ---
     with t_l3:
         st.subheader("Gestión de Compradores")
-        with st.form("f_comp"):
-            c1, c2 = st.columns(2)
-            nom = c1.text_input("Nombre Completo")
-            doc = c1.text_input("DNI / CUIT")
-            cel = c2.text_input("Celular")
-            dom = c2.text_input("Domicilio")
-            mail = st.text_input("Email")
-            if st.form_submit_button("Registrar Comprador"):
-                db_query("INSERT INTO compradores (nombre, dni_cuit, celular, domicilio, email) VALUES (?,?,?,?,?)", (nom, doc, cel, dom, mail), commit=True)
+        with st.expander("👤 Nuevo / Editar Comprador"):
+            with st.form("f_comp_edit"):
+                id_c_e = st.number_input("ID para editar (0 para nuevo)", min_value=0)
+                nom = st.text_input("Nombre Completo")
+                doc = st.text_input("DNI / CUIT")
+                cel = st.text_input("Celular")
+                if st.form_submit_button("Guardar Comprador"):
+                    if id_c_e == 0:
+                        db_query("INSERT INTO compradores (nombre, dni_cuit, celular) VALUES (?,?,?)", (nom, doc, cel), commit=True)
+                    else:
+                        db_query("UPDATE compradores SET nombre=?, dni_cuit=?, celular=? WHERE id=?", (nom, doc, cel, id_c_e), commit=True)
+                    st.rerun()
+        
+        df_c = db_query("SELECT * FROM compradores")
+        if df_c is not None:
+            st.dataframe(df_c, hide_index=True)
+            id_c_del = st.number_input("ID Comprador a eliminar", min_value=0)
+            if st.button("🗑️ Eliminar Comprador"):
+                db_query(f"DELETE FROM compradores WHERE id={id_c_del}", commit=True)
                 st.rerun()
+
 
     # --- 4. VENTAS ---
     with t_l4:
