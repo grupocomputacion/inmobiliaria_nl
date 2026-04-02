@@ -59,18 +59,25 @@ def f_m(v):
     except:
         return "0"
 
-def db_query(sql, params=(), commit=False):
-    """ Ejecuta consultas en SQLite de forma segura """
+def db_query(query, params=(), commit=False):
+    import sqlite3
+    import pandas as pd
+    conn = sqlite3.connect('datos_alquileres.db')
+    cur = conn.cursor()
     try:
-        with sqlite3.connect('datos_alquileres.db', check_same_thread=False) as conn:
-            if commit:
-                cur = conn.cursor()
-                cur.execute(sql, params)
-                conn.commit()
-                return cur.lastrowid
-            return pd.read_sql_query(sql, conn, params=params)
+        if commit:
+            cur.execute(query, params)
+            conn.commit()
+            last_id = cur.lastrowid
+            conn.close()
+            return last_id
+        else:
+            df = pd.read_sql_query(query, conn, params=params)
+            conn.close()
+            return df
     except Exception as e:
-        st.error(f"Error de base de datos: {e}")
+        st.error(f"Error en la base de datos: {e}")
+        conn.close()
         return None
 
 
@@ -1142,57 +1149,44 @@ elif menu == "🌳 Lotes":
         "🏗️ Desarrollos", "📏 Inventario Lotes", "👤 Compradores", "🤝 Ventas", "💰 Cuotas y Cobros"
     ])
 
-    # --- 1. DESARROLLOS (ABM REFORZADO) ---
+    # --- 1. DESARROLLOS (VERSIÓN DE PRUEBA RÍGIDA) ---
     with t_l1:
-        st.subheader("Ubicaciones de Loteos")
+        st.subheader("Configuración de Loteos")
         
-        # 1.1 FORMULARIO DE CARGA/EDICIÓN
-        with st.expander("➕ Cargar Nuevo / Editar Desarrollo", expanded=False):
-            with st.form("f_des_nuevo", clear_on_submit=True):
-                c1, c2 = st.columns(2)
-                id_edit = c1.number_input("ID para editar (0 para nuevo)", min_value=0, step=1, value=0)
-                nom_des = c1.text_input("Nombre del Desarrollo (Ej: Los Olivos)")
-                ubi_des = c2.text_input("Ubicación / Ruta")
-                loc_des = c2.text_input("Localidad")
-                
-                btn_guardar = st.form_submit_button("💾 GUARDAR DESARROLLO")
-                
-                if btn_guardar:
-                    if nom_des.strip() == "":
-                        st.error("El nombre del desarrollo es obligatorio.")
-                    else:
-                        try:
-                            if id_edit == 0:
-                                # INSERT NUEVO
-                                db_query("INSERT INTO desarrollos (nombre, ubicacion, localidad) VALUES (?,?,?)", 
-                                         (nom_des, ubi_des, loc_des), commit=True)
-                                st.success(f"✅ Desarrollo '{nom_des}' creado.")
-                            else:
-                                # UPDATE EXISTENTE
-                                db_query("UPDATE desarrollos SET nombre=?, ubicacion=?, localidad=? WHERE id=?", 
-                                         (nom_des, ubi_des, loc_des, id_edit), commit=True)
-                                st.success(f"✅ Desarrollo ID {id_edit} actualizado.")
-                            
-                            st.rerun() # Forzamos recarga para ver los cambios en la tabla
-                        except Exception as e:
-                            st.error(f"Error en DB: {e}")
-
-        # 1.2 VISUALIZACIÓN Y ELIMINACIÓN
-        st.write("---")
-        df_des = db_query("SELECT id as ID, nombre as Nombre, ubicacion as Ubicación, localidad as Localidad FROM desarrollos")
-        
-        if df_des is not None and not df_des.empty:
-            st.dataframe(df_des, use_container_width=True, hide_index=True)
+        # Formulario de Carga
+        with st.form("f_nuevo_loteo", clear_on_submit=True):
+            n_name = st.text_input("Nombre del Barrio / Desarrollo")
+            n_ubica = st.text_input("Ubicación Exacta")
+            n_local = st.text_input("Localidad")
             
-            # Bloque de eliminación por ID
-            with st.expander("🗑️ Zona de eliminación"):
-                id_a_borrar = st.number_input("Ingrese ID a eliminar", min_value=1, step=1, key="del_des_id")
-                if st.button("❌ ELIMINAR DEFINITIVAMENTE", key="btn_del_des"):
-                    db_query(f"DELETE FROM desarrollos WHERE id={id_a_borrar}", commit=True)
-                    st.warning(f"Desarrollo {id_a_borrar} eliminado.")
+            submit_loteo = st.form_submit_button("💾 GRABAR AHORA")
+            
+        if submit_loteo:
+            if n_name:
+                res = db_query("INSERT INTO desarrollos (nombre, ubicacion, localidad) VALUES (?,?,?)", 
+                               (n_name, n_ubica, n_local), commit=True)
+                if res:
+                    st.success(f"✅ ¡Guardado con éxito! ID generado: {res}")
                     st.rerun()
+            else:
+                st.warning("Por favor, ingresá al menos el nombre.")
+
+        st.write("---")
+        st.write("**Listado Actual en Base de Datos:**")
+        
+        # Forzamos la lectura limpia
+        df_listado = db_query("SELECT id, nombre, ubicacion, localidad FROM desarrollos")
+        
+        if df_listado is not None and not df_listado.empty:
+            st.table(df_listado) # Usamos st.table que es más rígido que dataframe para probar
+            
+            # Botón de borrado rápido para limpieza
+            id_borrar = st.number_input("ID para eliminar", min_value=1, step=1)
+            if st.button("🗑️ Eliminar Registro"):
+                db_query(f"DELETE FROM desarrollos WHERE id={id_borrar}", commit=True)
+                st.rerun()
         else:
-            st.info("Aún no hay desarrollos cargados.")
+            st.info("La base de datos de desarrollos está vacía.")
 
     # --- 2. INVENTARIO DE LOTES (CON IMÁGENES Y EDICIÓN) ---
     with t_l2:
