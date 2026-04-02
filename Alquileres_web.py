@@ -1142,29 +1142,57 @@ elif menu == "🌳 Lotes":
         "🏗️ Desarrollos", "📏 Inventario Lotes", "👤 Compradores", "🤝 Ventas", "💰 Cuotas y Cobros"
     ])
 
-    # --- 1. DESARROLLOS (ABM) ---
+    # --- 1. DESARROLLOS (ABM REFORZADO) ---
     with t_l1:
         st.subheader("Ubicaciones de Loteos")
-        with st.expander("➕ Nuevo / Editar Desarrollo"):
-            with st.form("f_des_edit", clear_on_submit=True):
-                id_e = st.number_input("ID para editar (0 para nuevo)", min_value=0, value=0)
-                n = st.text_input("Nombre del Desarrollo")
-                u = st.text_input("Ubicación / Ruta")
-                l = st.text_input("Localidad")
-                if st.form_submit_button("Guardar Desarrollo"):
-                    if id_e == 0:
-                        db_query("INSERT INTO desarrollos (nombre, ubicacion, localidad) VALUES (?,?,?)", (n, u, l), commit=True)
-                    else:
-                        db_query("UPDATE desarrollos SET nombre=?, ubicacion=?, localidad=? WHERE id=?", (n, u, l, id_e), commit=True)
-                    st.rerun()
         
-        df_des = db_query("SELECT * FROM desarrollos")
-        if df_des is not None:
-            st.dataframe(df_des, hide_index=True, use_container_width=True)
-            id_del = st.number_input("ID Desarrollo a eliminar", min_value=0, key="del_des")
-            if st.button("🗑️ Eliminar Desarrollo"):
-                db_query(f"DELETE FROM desarrollos WHERE id={id_del}", commit=True)
-                st.rerun()
+        # 1.1 FORMULARIO DE CARGA/EDICIÓN
+        with st.expander("➕ Cargar Nuevo / Editar Desarrollo", expanded=False):
+            with st.form("f_des_nuevo", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                id_edit = c1.number_input("ID para editar (0 para nuevo)", min_value=0, step=1, value=0)
+                nom_des = c1.text_input("Nombre del Desarrollo (Ej: Los Olivos)")
+                ubi_des = c2.text_input("Ubicación / Ruta")
+                loc_des = c2.text_input("Localidad")
+                
+                btn_guardar = st.form_submit_button("💾 GUARDAR DESARROLLO")
+                
+                if btn_guardar:
+                    if nom_des.strip() == "":
+                        st.error("El nombre del desarrollo es obligatorio.")
+                    else:
+                        try:
+                            if id_edit == 0:
+                                # INSERT NUEVO
+                                db_query("INSERT INTO desarrollos (nombre, ubicacion, localidad) VALUES (?,?,?)", 
+                                         (nom_des, ubi_des, loc_des), commit=True)
+                                st.success(f"✅ Desarrollo '{nom_des}' creado.")
+                            else:
+                                # UPDATE EXISTENTE
+                                db_query("UPDATE desarrollos SET nombre=?, ubicacion=?, localidad=? WHERE id=?", 
+                                         (nom_des, ubi_des, loc_des, id_edit), commit=True)
+                                st.success(f"✅ Desarrollo ID {id_edit} actualizado.")
+                            
+                            st.rerun() # Forzamos recarga para ver los cambios en la tabla
+                        except Exception as e:
+                            st.error(f"Error en DB: {e}")
+
+        # 1.2 VISUALIZACIÓN Y ELIMINACIÓN
+        st.write("---")
+        df_des = db_query("SELECT id as ID, nombre as Nombre, ubicacion as Ubicación, localidad as Localidad FROM desarrollos")
+        
+        if df_des is not None and not df_des.empty:
+            st.dataframe(df_des, use_container_width=True, hide_index=True)
+            
+            # Bloque de eliminación por ID
+            with st.expander("🗑️ Zona de eliminación"):
+                id_a_borrar = st.number_input("Ingrese ID a eliminar", min_value=1, step=1, key="del_des_id")
+                if st.button("❌ ELIMINAR DEFINITIVAMENTE", key="btn_del_des"):
+                    db_query(f"DELETE FROM desarrollos WHERE id={id_a_borrar}", commit=True)
+                    st.warning(f"Desarrollo {id_a_borrar} eliminado.")
+                    st.rerun()
+        else:
+            st.info("Aún no hay desarrollos cargados.")
 
     # --- 2. INVENTARIO DE LOTES (CON IMÁGENES Y EDICIÓN) ---
     with t_l2:
