@@ -44,18 +44,23 @@ class PDFRecibo(FPDF):
 
 # --- FUNCIONES DE SOPORTE CRÍTICAS ---
 
-def cl(t): 
-    """ Limpia strings de moneda y los convierte a entero para la DB """
+def cl(texto):
+    """Limpia el formato para guardar en la DB como número puro"""
     try:
-        if not t: return 0
-        return int(str(t).replace('$', '').replace('.', '').replace(',', '').strip())
+        if isinstance(texto, (int, float)):
+            return int(texto)
+        # Quitamos el punto de miles para que Python lo procese como nro
+        return int(str(texto).replace(".", "").replace("$", "").replace("U$D", "").strip())
     except:
         return 0
 
-def f_m(v): 
-    """ Formatea números enteros a string con separador de miles '.' """
+def f_m(valor):
+    """Formatea montos: Sin decimales y con punto en miles (Ej: 1.500.000)"""
     try:
-        return f"{int(v or 0):,}".replace(",", ".")
+        if valor is None or valor == "":
+            return "0"
+        # Quitamos decimales convirtiendo a int y formateamos con punto
+        return f"{int(float(valor)):,}".replace(",", ".")
     except:
         return "0"
 
@@ -1212,11 +1217,11 @@ elif menu == "🌳 Lotes":
                     st.markdown("---")
                     st.markdown("**💰 Propuesta Comercial (U$D)**")
                     p1, p2, p3, p4 = st.columns(4)
-                    p_cont = p1.number_input("Precio Contado", min_value=0.0)
-                    p_entrega = p2.number_input("Entrega Sugerida", min_value=0.0)
+                    p_cont = p1.number_input("Precio Contado", min_value=0, step=1, format="%d")
+                    p_entrega = p2.number_input("Entrega Sugerida", min_value=0, step=1, format="%d")
                     p_cuotas_n = p3.number_input("Cant. Cuotas", min_value=0, value=12)
-                    p_cuota_v = p4.number_input("Valor Cuota", min_value=0.0)
-                    
+                    p_cuota_v = p4.number_input("Valor Cuota", min_value=0, step=1, format="%d")
+
                     obs = st.text_area("Observaciones")
                     fotos = st.file_uploader("Subir Imágenes del Lote", accept_multiple_files=True, type=['jpg','png','jpeg'])
                     
