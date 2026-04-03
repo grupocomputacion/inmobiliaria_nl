@@ -1088,7 +1088,13 @@ elif menu == "⚙️ Maestros":
                         # Tablas a exportar
                         for tabla, hoja in [('bloques','Inmuebles'), ('inmuebles','Unidades'), 
                                            ('inquilinos','Inquilinos'), ('contratos','Contratos'), 
-                                           ('deudas','Deudas')]:
+                                           ('deudas','Deudas')
+                                           # --- LOTES (Asegurate que estas 5 estén aquí) ---
+                                           ('desarrollos', 'Loteos_Desarrollos'),
+                                           ('lotes', 'Lotes_Inventario'),
+                                           ('compradores', 'Lotes_Compradores'),
+                                           ('ventas_lotes', 'Lotes_Ventas'),
+                                           ('cuotas_lotes', 'Lotes_Cuotas') ]:
                             df_tmp = db_query(f"SELECT * FROM {tabla}")
                             if df_tmp is not None:
                                 df_tmp.to_excel(writer, sheet_name=hoja, index=False)
@@ -1120,7 +1126,13 @@ elif menu == "⚙️ Maestros":
                     try:
                         dfs = pd.read_excel(archivo_subido, sheet_name=None)
                         mapping = {'Inmuebles':'bloques', 'Unidades':'inmuebles', 
-                                   'Inquilinos':'inquilinos', 'Contratos':'contratos', 'Deudas':'deudas'}
+                                   'Inquilinos':'inquilinos', 'Contratos':'contratos', 'Deudas':'deudas'
+                                   # --- LOTES (Asegurate que estas 5 estén aquí) ---
+                                  'desarrollos': 'Loteos_Desarrollos',
+                                  'lotes':'Lotes_Inventario',
+                                  'compradores':'Lotes_Compradores',
+                                  'ventas_lotes':'Lotes_Ventas',
+                                  'cuotas_lotes':'Lotes_Cuotas'}
                         with sqlite3.connect('datos_alquileres.db') as conn:
                             for hoja, tabla in mapping.items():
                                 if hoja in dfs:
@@ -1137,7 +1149,8 @@ elif menu == "⚙️ Maestros":
             if st.button("🔥 RESET SISTEMA"):
                 if cod_m == "3280":
                     with sqlite3.connect('datos_alquileres.db') as conn:
-                        for t in ['bloques','inmuebles','inquilinos','contratos','deudas']:
+                        for t in ['bloques','inmuebles','inquilinos','contratos','deudas',
+                                  'desarrollo','lotes','compradores','ventas_lotes','cuotas_lotes']:
                             conn.execute(f"DELETE FROM {t}")
                     st.warning("Base de datos vaciada por completo.")
                     st.rerun()
