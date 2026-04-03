@@ -1088,7 +1088,7 @@ elif menu == "⚙️ Maestros":
                         # Tablas a exportar
                         for tabla, hoja in [('bloques','Inmuebles'), ('inmuebles','Unidades'), 
                                            ('inquilinos','Inquilinos'), ('contratos','Contratos'), 
-                                           ('deudas','Deudas')
+                                           ('deudas','Deudas'),
                                            # --- LOTES (Asegurate que estas 5 estén aquí) ---
                                            ('desarrollos', 'Loteos_Desarrollos'),
                                            ('lotes', 'Lotes_Inventario'),
@@ -1126,7 +1126,7 @@ elif menu == "⚙️ Maestros":
                     try:
                         dfs = pd.read_excel(archivo_subido, sheet_name=None)
                         mapping = {'Inmuebles':'bloques', 'Unidades':'inmuebles', 
-                                   'Inquilinos':'inquilinos', 'Contratos':'contratos', 'Deudas':'deudas'
+                                   'Inquilinos':'inquilinos', 'Contratos':'contratos', 'Deudas':'deudas',
                                    # --- LOTES (Asegurate que estas 5 estén aquí) ---
                                   'desarrollos': 'Loteos_Desarrollos',
                                   'lotes':'Lotes_Inventario',
