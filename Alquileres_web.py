@@ -726,10 +726,10 @@ elif menu == "💰 Cobranzas":
 # --- SECCIÓN MOROSOS CORREGIDA ---
 elif menu == "🚨 Morosos":
 
-    st.subheader("Morosos")
+    st.subheader("Estado de Morosidad")
 
     query_morosos = """
-        SELECT inq.nombre, d.monto_debe 
+        SELECT inq.nombre as Inquilino, d.monto_debe as Deuda
         FROM deudas d 
         JOIN contratos c ON d.id_contrato = c.id 
         JOIN inquilinos inq ON c.id_inquilino = inq.id 
@@ -738,16 +738,27 @@ elif menu == "🚨 Morosos":
     df_morosos = db_query(query_morosos)
 
     if df_morosos is not None and not df_morosos.empty:
-        # 1. Creamos una copia para no alterar los datos originales si necesitás sumar
+        # 1. Calculamos el Total Numérico antes de formatear
+        total_deuda_neta = df_morosos['Deuda'].sum()
+    
+        # 2. Preparamos la visualización (Copia para no romper el original)
         df_morosos_view = df_morosos.copy()
     
-        # 2. Aplicamos el formato: Sin decimales y con punto en miles
-        df_morosos_view['monto_debe'] = df_morosos_view['monto_debe'].apply(f_m)
+        # 3. Aplicamos el formato sin decimales y con punto de miles
+        df_morosos_view['Deuda'] = df_morosos_view['Deuda'].apply(f_m)
     
-        # 3. Mostramos la tabla limpia
+        # 4. Mostramos la tabla con los nombres de columna solicitados
         st.dataframe(df_morosos_view, use_container_width=True, hide_index=True)
+    
+        # --- 5. TOTALIZADOR RESALTADO ---
+        st.write("---")
+        c_tot1, c_tot2 = st.columns([2, 1])
+        c_tot1.markdown("### TOTAL DEUDA EN CALLE:")
+        # Usamos f_m para que el total también sea consistente (sin decimales)
+        c_tot2.subheader(f"$ {f_m(total_deuda_neta)}")
+    
     else:
-        st.success("✅ ¡No hay morosos registrados!")
+        st.success("✅ ¡Excelente! No existen deudas pendientes de cobro.")
 
 
 # ==========================================
