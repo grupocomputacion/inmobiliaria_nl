@@ -1224,87 +1224,66 @@ elif menu == "⚙️ Maestros":
                 st.success("Cargos generados.")
 
 # ==========================================
-# 7. GESTIÓN DE LOTES (V.2.0 - CRUD COMPLETO)
+# 7. GESTIÓN DE LOTES (V.2.6 - AJUSTES DE PRECISIÓN)
 # ==========================================
 elif menu == "🌳 Lotes":
     st.header("Gestión y Comercialización de Lotes (U$D)")
     
-    # Crear carpeta de fotos si no existe
     if not os.path.exists("fotos_lotes"):
         os.makedirs("fotos_lotes")
 
     t_l1, t_l2, t_l3, t_l4, t_l5 = st.tabs([
-        "🏗️ Desarrollos", "📏 Inventario Lotes", "👤 Compradores", "🤝 Ventas", "💰 Cuotas y Cobros"
+        "🏗️ Nombre del Loteo", "📏 Inventario Lotes", "👤 Compradores", "🤝 Ventas", "💰 Cuotas y Cobros"
     ])
 
-    # --- 1. DESARROLLOS (VERSIÓN DE PRUEBA RÍGIDA) ---
+    # --- 1. NOMBRE DEL LOTEO (EX DESARROLLO) ---
     with t_l1:
-        st.subheader("Configuración de Loteos")
-        
-        # Formulario de Carga
-        with st.form("f_nuevo_loteo", clear_on_submit=True):
-            n_name = st.text_input("Nombre del Barrio / Desarrollo")
-            n_ubica = st.text_input("Ubicación Exacta")
+        st.subheader("Configuración de Nombres de Loteos")
+        with st.form("f_loteo_nuevo", clear_on_submit=True):
+            n_name = st.text_input("Nombre del Loteo (Ej: Los Olivos)")
+            n_ubica = st.text_input("Ubicación / Ruta")
             n_local = st.text_input("Localidad")
-            
-            submit_loteo = st.form_submit_button("💾 GRABAR AHORA")
-            
-        if submit_loteo:
-            if n_name:
-                res = db_query("INSERT INTO desarrollos (nombre, ubicacion, localidad) VALUES (?,?,?)", 
-                               (n_name, n_ubica, n_local), commit=True)
-                if res:
-                    st.success(f"✅ ¡Guardado con éxito! ID generado: {res}")
+            if st.form_submit_button("💾 GRABAR NOMBRE DE LOTEO"):
+                if n_name:
+                    db_query("INSERT INTO desarrollos (nombre, ubicacion, localidad) VALUES (?,?,?)", 
+                             (n_name, n_ubica, n_local), commit=True)
+                    st.success("✅ Nombre de loteo guardado.")
                     st.rerun()
-            else:
-                st.warning("Por favor, ingresá al menos el nombre.")
 
         st.write("---")
-        st.write("**Listado Actual en Base de Datos:**")
-        
-        # Forzamos la lectura limpia
-        df_listado = db_query("SELECT id, nombre, ubicacion, localidad FROM desarrollos")
-        
-        if df_listado is not None and not df_listado.empty:
-            st.table(df_listado) # Usamos st.table que es más rígido que dataframe para probar
-            
-            # Botón de borrado rápido para limpieza
-            id_borrar = st.number_input("ID para eliminar", min_value=1, step=1)
-            if st.button("🗑️ Eliminar Registro"):
-                db_query(f"DELETE FROM desarrollos WHERE id={id_borrar}", commit=True)
-                st.rerun()
-        else:
-            st.info("La base de datos de desarrollos está vacía.")
+        df_loteos = db_query("SELECT id as ID, nombre as [Nombre del Loteo], ubicacion as [Ubicación], localidad as Localidad FROM desarrollos")
+        if df_loteos is not None and not df_loteos.empty:
+            st.table(df_loteos)
 
-    # --- 2. INVENTARIO DE LOTES (V.2.5 - BIMONETARIO Y MEJORADO) ---
+    # --- 2. INVENTARIO DE LOTES (CON DECIMALES EN MEDIDAS) ---
     with t_l2:
-        st.subheader("📦 Gestión de Inventario de Lotes")
-        
+        st.subheader("📦 Gestión de Inventario")
         df_d_ref = db_query("SELECT id, nombre FROM desarrollos")
+        
         if df_d_ref is not None and not df_d_ref.empty:
             with st.expander("📝 Carga de Lote (ID Automático)", expanded=True):
-                with st.form("f_lote_v25", clear_on_submit=True):
-                    # El ID ya no se pide, se muestra el desarrollo
+                with st.form("f_lote_v26", clear_on_submit=True):
                     id_d = st.selectbox("NOMBRE DEL LOTEO", df_d_ref['id'], 
                                         format_func=lambda x: df_d_ref[df_d_ref['id']==x]['nombre'].values[0])
                     
                     c1, c2, c3 = st.columns(3)
-                    lt = c1.text_input("NRO LOTE") # Primero Lote
-                    mz = c2.text_input("MANZANA")  # Segundo Manzana
+                    lt = c1.text_input("NRO LOTE")
+                    mz = c2.text_input("MANZANA")
                     titular = c3.text_input("TITULAR CEDENTE")
                     
                     f1, f2, f3, f4 = st.columns(4)
-                    m2 = f1.number_input("M2 Totales", min_value=0)
-                    fre = f2.number_input("Frente (m)", min_value=0)
-                    fon = f3.number_input("Fondo (m)", min_value=0)
+                    # AQUÍ PERMITIMOS 2 DECIMALES (step=0.01)
+                    m2 = f1.number_input("M2 Totales", min_value=0.0, step=0.01, format="%.2f")
+                    fre = f2.number_input("Frente (m)", min_value=0.0, step=0.01, format="%.2f")
+                    fon = f3.number_input("Fondo (m)", min_value=0.0, step=0.01, format="%.2f")
                     amojon = f4.selectbox("Amojonamiento", ["NO", "SI"])
                     
                     s1, s2 = st.columns(2)
                     serv = s1.multiselect("Servicios", ["LUZ", "AGUA", "INTERNET", "GAS"])
-                    c_amojon = s2.number_input("Costo Amojonamiento", min_value=0, step=100)
+                    c_amojon = s2.number_input("Costo Amojonamiento", min_value=0, step=1)
 
                     st.markdown("---")
-                    st.markdown("**💰 Propuesta Económica**")
+                    st.markdown("**💰 Propuesta Económica** (Montos sin decimales)")
                     
                     p1, p2 = st.columns([2, 1])
                     p_cont = p1.number_input("Precio Contado", min_value=0, step=1)
@@ -1320,56 +1299,35 @@ elif menu == "🌳 Lotes":
                     m_q = q3.selectbox("Moneda Cuota", ["U$D", "PESOS"], key="m3")
                     
                     obs = st.text_area("Observaciones")
-                    fotos = st.file_uploader("Fotos del Lote", accept_multiple_files=True)
+                    fotos = st.file_uploader("Subir Imágenes", accept_multiple_files=True)
                     
                     if st.form_submit_button("💾 GUARDAR REGISTRO"):
-                        try:
-                            # INSERT puro con ID automático
-                            query_ins = """INSERT INTO lotes 
+                        new_id = db_query("""INSERT INTO lotes 
                             (id_desarrollo, nro_lote, manzana, titular_cedente, metros_cuadrados, frente, fondo, 
                             amojonamiento, costo_amojonamiento, servicios, precio_contado, moneda_contado, 
                             entrega_monto, moneda_entrega, cuotas_monto, moneda_cuotas, cant_cuotas, observaciones) 
-                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
-                            
-                            params = (id_d, lt, mz, titular, m2, fre, fon, amojon, c_amojon, ", ".join(serv), 
-                                      p_cont, m_cont, p_ent, m_ent, p_q_v, m_q, p_q_n, obs)
-                            
-                            new_id = db_query(query_ins, params, commit=True)
-                            
-                            if fotos:
-                                for i, foto in enumerate(fotos):
-                                    with open(f"fotos_lotes/lote_{new_id}_{i}.jpg", "wb") as f:
-                                        f.write(foto.getbuffer())
-                            
-                            st.success(f"✅ Lote guardado con éxito. ID Sistema: {new_id}")
-                            st.rerun() # Esto limpia el form y refresca la tabla de abajo
-                        except Exception as e:
-                            st.error(f"Error al grabar: {e}")
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", 
+                            (id_d, lt, mz, titular, m2, fre, fon, amojon, c_amojon, ", ".join(serv), 
+                             p_cont, m_cont, p_ent, m_ent, p_q_v, m_q, p_q_n, obs), commit=True)
+                        
+                        if fotos:
+                            for i, foto in enumerate(fotos):
+                                with open(f"fotos_lotes/lote_{new_id}_{i}.jpg", "wb") as f:
+                                    f.write(foto.getbuffer())
+                        st.success(f"✅ Lote guardado con ID: {new_id}")
+                        st.rerun()
 
-            # --- VISUALIZACIÓN REFORZADA ---
+            # --- TABLA DE INVENTARIO ---
             st.write("---")
-            st.subheader("📋 Inventario Actual")
             df_lotes = db_query("""
                 SELECT l.id as ID, d.nombre as [Nombre del Loteo], l.nro_lote as Lote, l.manzana as Mz, 
-                       l.titular_cedente as Titular, l.amojonamiento as Amoj, l.estado as Estado,
-                       l.moneda_contado || ' ' || l.precio_contado as [P. Contado]
-                FROM lotes l 
-                JOIN desarrollos d ON l.id_desarrollo = d.id
-                ORDER BY l.id DESC
+                       l.metros_cuadrados as [M2], l.amojonamiento as Amoj, l.estado as Estado
+                FROM lotes l JOIN desarrollos d ON l.id_desarrollo = d.id ORDER BY l.id DESC
             """)
-            
-            if df_lotes is not None and not df_lotes.empty:
-                # Aplicamos formato a la columna de precio si fuera necesario
+            if df_lotes is not None:
                 st.dataframe(df_lotes, use_container_width=True, hide_index=True)
-                
-                # Acción de eliminación/edición rápida
-                sel_l = st.selectbox("Seleccione ID para ver fotos o eliminar:", df_lotes['ID'].tolist())
-                if st.button("🗑️ Eliminar Lote"):
-                    db_query(f"DELETE FROM lotes WHERE id={sel_l}", commit=True)
-                    st.rerun()
-            else:
-                st.info("No hay lotes en el inventario.")
 
+                
     # --- 3. COMPRADORES (ABM) ---
     with t_l3:
         st.subheader("Gestión de Compradores")
