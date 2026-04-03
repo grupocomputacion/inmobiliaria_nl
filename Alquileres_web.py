@@ -85,7 +85,29 @@ def db_query(query, params=(), commit=False):
         conn.close()
         return None
 
-
+# --- ACTUALIZACIÓN ESTRUCTURA LOTES (V.2.5) ---
+db_query("""CREATE TABLE IF NOT EXISTS lotes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_desarrollo INTEGER,
+    manzana TEXT,
+    nro_lote TEXT,
+    metros_cuadrados REAL,
+    frente REAL,
+    fondo REAL,
+    servicios TEXT,
+    observaciones TEXT,
+    precio_contado REAL,
+    moneda_contado TEXT DEFAULT 'U$D',
+    entrega_monto REAL,
+    moneda_entrega TEXT DEFAULT 'PESOS',
+    cuotas_monto REAL,
+    moneda_cuotas TEXT DEFAULT 'U$D',
+    cant_cuotas INTEGER,
+    amojonamiento TEXT DEFAULT 'NO',
+    costo_amojonamiento REAL DEFAULT 0,
+    titular_cedente TEXT,
+    estado TEXT DEFAULT 'Libre'
+)""", commit=True)
     
 # ==========================================
 # 1. CONFIGURACIÓN E IDENTIDAD (V.5.0)
@@ -1254,92 +1276,99 @@ elif menu == "🌳 Lotes":
         else:
             st.info("La base de datos de desarrollos está vacía.")
 
-# --- 2. INVENTARIO DE LOTES (CON ESTRUCTURA DE FINANCIACIÓN) ---
+    # --- 2. INVENTARIO DE LOTES (V.2.5 - BIMONETARIO Y MEJORADO) ---
     with t_l2:
-        st.subheader("Gestión de Lotes e Imágenes")
+        st.subheader("📦 Gestión de Inventario de Lotes")
         
         df_d_ref = db_query("SELECT id, nombre FROM desarrollos")
         if df_d_ref is not None and not df_d_ref.empty:
-            with st.expander("🛠️ Panel de Carga y Edición de Lote", expanded=True):
-                with st.form("f_lote_abm_v2", clear_on_submit=True):
-                    id_l_e = st.number_input("ID Lote para editar (0 para nuevo)", min_value=0, value=0)
-                    id_d = st.selectbox("Desarrollo", df_d_ref['id'], format_func=lambda x: df_d_ref[df_d_ref['id']==x]['nombre'].values[0])
+            with st.expander("📝 Carga de Lote (ID Automático)", expanded=True):
+                with st.form("f_lote_v25", clear_on_submit=True):
+                    # El ID ya no se pide, se muestra el desarrollo
+                    id_d = st.selectbox("NOMBRE DEL LOTEO", df_d_ref['id'], 
+                                        format_func=lambda x: df_d_ref[df_d_ref['id']==x]['nombre'].values[0])
                     
                     c1, c2, c3 = st.columns(3)
-                    mz = c1.text_input("Manzana")
-                    lt = c2.text_input("Nro Lote")
-                    m2 = c3.number_input("M2 Totales", min_value=0.0)
+                    lt = c1.text_input("NRO LOTE") # Primero Lote
+                    mz = c2.text_input("MANZANA")  # Segundo Manzana
+                    titular = c3.text_input("TITULAR CEDENTE")
                     
-                    f1, f2, f3 = st.columns(3)
-                    fre = f1.number_input("Metros Frente", min_value=0.0)
-                    fon = f2.number_input("Metros Fondo", min_value=0.0)
-                    serv = f3.multiselect("Servicios", ["LUZ", "AGUA", "INTERNET", "GAS"])
+                    f1, f2, f3, f4 = st.columns(4)
+                    m2 = f1.number_input("M2 Totales", min_value=0)
+                    fre = f2.number_input("Frente (m)", min_value=0)
+                    fon = f3.number_input("Fondo (m)", min_value=0)
+                    amojon = f4.selectbox("Amojonamiento", ["NO", "SI"])
                     
+                    s1, s2 = st.columns(2)
+                    serv = s1.multiselect("Servicios", ["LUZ", "AGUA", "INTERNET", "GAS"])
+                    c_amojon = s2.number_input("Costo Amojonamiento", min_value=0, step=100)
+
                     st.markdown("---")
-                    st.markdown("**💰 Propuesta Comercial (U$D)**")
-                    p1, p2, p3, p4 = st.columns(4)
-                    p_cont = p1.number_input("Precio Contado", min_value=0, step=1, format="%d")
-                    p_entrega = p2.number_input("Entrega Sugerida", min_value=0, step=1, format="%d")
-                    p_cuotas_n = p3.number_input("Cant. Cuotas", min_value=0, value=12)
-                    p_cuota_v = p4.number_input("Valor Cuota", min_value=0, step=1, format="%d")
-
-                    obs = st.text_area("Observaciones")
-                    fotos = st.file_uploader("Subir Imágenes del Lote", accept_multiple_files=True, type=['jpg','png','jpeg'])
+                    st.markdown("**💰 Propuesta Económica**")
                     
-                    if st.form_submit_button("💾 GUARDAR LOTE"):
-                        serv_str = ", ".join(serv)
-                        # Cálculo del "Precio Financiado" total para la base de datos
-                        p_fin_total = p_entrega + (p_cuotas_n * p_cuota_v)
-                        
-                        if id_l_e == 0:
-                            # INSERT: Asegurate de que tu tabla tenga las columnas o usaremos precio_financiado para el total
-                            new_id = db_query("""INSERT INTO lotes 
-                                (id_desarrollo, manzana, nro_lote, metros_cuadrados, frente, fondo, servicios, observaciones, precio_contado, precio_financiado) 
-                                VALUES (?,?,?,?,?,?,?,?,?,?)""", 
-                                (id_d, mz, lt, m2, fre, fon, serv_str, obs, p_cont, p_fin_total), commit=True)
-                            target_id = new_id
-                        else:
-                            # UPDATE
-                            db_query("""UPDATE lotes SET 
-                                id_desarrollo=?, manzana=?, nro_lote=?, metros_cuadrados=?, frente=?, fondo=?, servicios=?, observaciones=?, precio_contado=?, precio_financiado=? 
-                                WHERE id=?""", 
-                                (id_d, mz, lt, m2, fre, fon, serv_str, obs, p_cont, p_fin_total, id_l_e), commit=True)
-                            target_id = id_l_e
-                        
-                        # Guardar fotos
-                        if fotos:
-                            for i, foto in enumerate(fotos):
-                                with open(f"fotos_lotes/lote_{target_id}_{i}.jpg", "wb") as f:
-                                    f.write(foto.getbuffer())
-                        
-                        st.success(f"✅ Lote {target_id} guardado con éxito.")
-                        st.rerun()
+                    p1, p2 = st.columns([2, 1])
+                    p_cont = p1.number_input("Precio Contado", min_value=0, step=1)
+                    m_cont = p2.selectbox("Moneda Cont.", ["U$D", "PESOS"], key="m1")
+                    
+                    e1, e2 = st.columns([2, 1])
+                    p_ent = e1.number_input("Entrega pactada", min_value=0, step=1)
+                    m_ent = e2.selectbox("Moneda Ent.", ["PESOS", "U$D"], key="m2")
+                    
+                    q1, q2, q3 = st.columns([1, 2, 1])
+                    p_q_n = q1.number_input("Cant. Cuotas", min_value=0, value=12)
+                    p_q_v = q2.number_input("Valor Cuota", min_value=0, step=1)
+                    m_q = q3.selectbox("Moneda Cuota", ["U$D", "PESOS"], key="m3")
+                    
+                    obs = st.text_area("Observaciones")
+                    fotos = st.file_uploader("Fotos del Lote", accept_multiple_files=True)
+                    
+                    if st.form_submit_button("💾 GUARDAR REGISTRO"):
+                        try:
+                            # INSERT puro con ID automático
+                            query_ins = """INSERT INTO lotes 
+                            (id_desarrollo, nro_lote, manzana, titular_cedente, metros_cuadrados, frente, fondo, 
+                            amojonamiento, costo_amojonamiento, servicios, precio_contado, moneda_contado, 
+                            entrega_monto, moneda_entrega, cuotas_monto, moneda_cuotas, cant_cuotas, observaciones) 
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
+                            
+                            params = (id_d, lt, mz, titular, m2, fre, fon, amojon, c_amojon, ", ".join(serv), 
+                                      p_cont, m_cont, p_ent, m_ent, p_q_v, m_q, p_q_n, obs)
+                            
+                            new_id = db_query(query_ins, params, commit=True)
+                            
+                            if fotos:
+                                for i, foto in enumerate(fotos):
+                                    with open(f"fotos_lotes/lote_{new_id}_{i}.jpg", "wb") as f:
+                                        f.write(foto.getbuffer())
+                            
+                            st.success(f"✅ Lote guardado con éxito. ID Sistema: {new_id}")
+                            st.rerun() # Esto limpia el form y refresca la tabla de abajo
+                        except Exception as e:
+                            st.error(f"Error al grabar: {e}")
 
-            # --- Visualización con las nuevas columnas ---
+            # --- VISUALIZACIÓN REFORZADA ---
             st.write("---")
+            st.subheader("📋 Inventario Actual")
             df_lotes = db_query("""
-                SELECT l.id as ID, d.nombre as Desarrollo, l.manzana as Mz, l.nro_lote as Lote, 
-                       l.estado as Estado, l.precio_contado as [Contado U$D], 
-                       l.precio_financiado as [Total Financiado U$D]
+                SELECT l.id as ID, d.nombre as [Nombre del Loteo], l.nro_lote as Lote, l.manzana as Mz, 
+                       l.titular_cedente as Titular, l.amojonamiento as Amoj, l.estado as Estado,
+                       l.moneda_contado || ' ' || l.precio_contado as [P. Contado]
                 FROM lotes l 
                 JOIN desarrollos d ON l.id_desarrollo = d.id
+                ORDER BY l.id DESC
             """)
             
-            if df_lotes is not None:
+            if df_lotes is not None and not df_lotes.empty:
+                # Aplicamos formato a la columna de precio si fuera necesario
                 st.dataframe(df_lotes, use_container_width=True, hide_index=True)
                 
-                # Visualizador de fotos y eliminación (se mantiene igual)
-                c_v1, c_v2 = st.columns([2,1])
-                sel_v = c_v1.selectbox("Acciones para Lote ID:", df_lotes['ID'].tolist())
-                
-                galeria = [f"fotos_lotes/{img}" for img in os.listdir("fotos_lotes") if img.startswith(f"lote_{sel_v}_")]
-                if galeria:
-                    st.image(galeria, width=150)
-                
-                if c_v2.button("🗑️ ELIMINAR LOTE"):
-                    db_query(f"DELETE FROM lotes WHERE id={sel_v}", commit=True)
+                # Acción de eliminación/edición rápida
+                sel_l = st.selectbox("Seleccione ID para ver fotos o eliminar:", df_lotes['ID'].tolist())
+                if st.button("🗑️ Eliminar Lote"):
+                    db_query(f"DELETE FROM lotes WHERE id={sel_l}", commit=True)
                     st.rerun()
-
+            else:
+                st.info("No hay lotes en el inventario.")
 
     # --- 3. COMPRADORES (ABM) ---
     with t_l3:
