@@ -725,9 +725,30 @@ elif menu == "💰 Cobranzas":
 # ==========================================
 
 elif menu == "🚨 Morosos":
-    st.header("Morosos")
-    mora = db_query("SELECT inq.nombre, d.monto_debe FROM deudas d JOIN contratos c ON d.id_contrato=c.id JOIN inquilinos inq ON c.id_inquilino=inq.id WHERE d.pagado=0")
-    if mora is not None: st.table(mora)
+# --- SECCIÓN MOROSOS CORREGIDA ---
+st.subheader("Morosos")
+
+query_morosos = """
+    SELECT inq.nombre, d.monto_debe 
+    FROM deudas d 
+    JOIN contratos c ON d.id_contrato = c.id 
+    JOIN inquilinos inq ON c.id_inquilino = inq.id 
+    WHERE d.pagado = 0
+"""
+df_morosos = db_query(query_morosos)
+
+if df_morosos is not None and not df_morosos.empty:
+    # 1. Creamos una copia para no alterar los datos originales si necesitás sumar
+    df_morosos_view = df_morosos.copy()
+    
+    # 2. Aplicamos el formato: Sin decimales y con punto en miles
+    df_morosos_view['monto_debe'] = df_morosos_view['monto_debe'].apply(f_m)
+    
+    # 3. Mostramos la tabla limpia
+    st.dataframe(df_morosos_view, use_container_width=True, hide_index=True)
+else:
+    st.success("✅ ¡No hay morosos registrados!")
+
 
 # ==========================================
 # 4. CONTROL DE CAJA (V.11.2 - INDEPENDIENTE)
