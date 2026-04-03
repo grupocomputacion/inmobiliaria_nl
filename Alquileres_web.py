@@ -1389,89 +1389,142 @@ elif menu == "🌳 Lotes":
         else:
             st.info("Aún no hay compradores registrados en el sistema.")
 
-    # --- 4. VENTAS ---
+    # --- 4. GESTIÓN DE VENTAS (V.2.8) ---
     with t_l4:
-        st.subheader("Registrar Venta de Lote")
-        lotes_libres = db_query("SELECT id, manzana || '-' || nro_lote as ref FROM lotes WHERE estado='Libre'")
+        st.subheader("🤝 Registrar Venta de Lote")
+        
+        # Query que combina Loteo + Manzana + Lote para identificar unívocamente
+        query_lotes_libres = """
+            SELECT l.id, d.nombre || ' - Mz: ' || l.manzana || ' - Lote: ' || l.nro_lote as ref,
+                   l.precio_contado, l.entrega_monto, l.cant_cuotas, l.cuotas_monto, l.moneda_cuotas
+            FROM lotes l 
+            JOIN desarrollos d ON l.id_desarrollo = d.id 
+            WHERE l.estado = 'Libre'
+        """
+        lotes_libres = db_query(query_lotes_libres)
         comps = db_query("SELECT id, nombre FROM compradores")
         
-        if lotes_libres is not None and comps is not None:
-            with st.form("f_venta_lote"):
-                id_l = st.selectbox("Lote a vender", lotes_libres['id'], format_func=lambda x: lotes_libres[lotes_libres['id']==x]['ref'].values[0])
-                id_c = st.selectbox("Comprador", comps['id'], format_func=lambda x: comps[comps['id']==x]['nombre'].values[0])
+        if lotes_libres is not None and not lotes_libres.empty and comps is not None:
+            with st.form("f_venta_lote_v28"):
+                # 1. Identificación del Lote y Comprador
+                id_l = st.selectbox("Seleccione Lote (Loteo - Mz - Lote)", lotes_libres['id'], 
+                                    format_func=lambda x: lotes_libres[lotes_libres['id']==x]['ref'].values[0])
+                id_c = st.selectbox("Comprador", comps['id'], 
+                                    format_func=lambda x: comps[comps['id']==x]['nombre'].values[0])
+                
+                # Traemos valores sugeridos del inventario para el lote seleccionado
+                sugerido = lotes_libres[lotes_libres['id'] == id_l].iloc[0]
+                
+                col1, col2 = st.columns(2)
+                f_venta = col1.date_input("Fecha de la Venta", value=date.today())
+                f_inicio_cuotas = col2.date_input("Mes de 1ra Cuota (Para generar cronograma)", value=date.today())
+                
+                st.markdown("---")
                 c1, c2, c3 = st.columns(3)
-                tot_usd = c1.number_input("Precio Venta Total (U$D)")
-                ent_usd = c2.number_input("Entrega Inicial (U$D)")
-                cuotas = c3.number_input("Cantidad de Cuotas", min_value=0, value=12)
-                f_v = st.date_input("Fecha de Operación")
+                v_total = c1.number_input("Precio Venta Pactado (U$D)", value=int(sugerido['precio_contado']))
+                v_entrega = c2.number_input("Entrega Recibida", value=int(sugerido['entrega_monto']))
+                v_cant_q = c3.number_input("Cantidad de Cuotas", value=int(sugerido['cant_cuotas']))
                 
-                if st.form_submit_button("🤝 CONFIRMAR VENTA"):
-                    # 1. Registrar Venta
-                    monto_cuota = (tot_usd - ent_usd) / cuotas if cuotas > 0 else 0
-                    v_id = db_query("""INSERT INTO ventas_lotes (id_lote, id_comprador, fecha_venta, monto_total_usd, entrega_usd, cantidad_cuotas, monto_cuota_usd) 
-                                    VALUES (?,?,?,?,?,?,?)""", (id_l, id_c, f_v, tot_usd, ent_usd, cuotas, monto_cuota), commit=True)
+                v_monto_q = c1.number_input("Monto de cada Cuota", value=int(sugerido['cuotas_monto']))
+                v_moneda_q = c2.selectbox("Moneda de la Cuota", ["U$D", "PESOS"], 
+                                         index=0 if sugerido['moneda_cuotas'] == 'U$D' else 1)
+                
+                st.info("💡 Al confirmar, se generará el plan de cuotas automáticamente.")
+                
+                if st.form_submit_button("🤝 CONFIRMAR VENTA Y GENERAR DEUDA"):
+                    # 1. Registrar la Venta
+                    v_id = db_query("""INSERT INTO ventas_lotes 
+                        (id_lote, id_comprador, fecha_venta, monto_total_usd, entrega_usd, cantidad_cuotas, monto_cuota_usd) 
+                        VALUES (?,?,?,?,?,?,?)""", 
+                        (id_l, id_c, f_venta, v_total, v_entrega, v_cant_q, v_monto_q), commit=True)
                     
-                    # 2. Generar Cuotas
-                    for i in range(1, cuotas + 1):
-                        venc = f_v + timedelta(days=30 * i)
-                        db_query("INSERT INTO cuotas_lotes (id_venta, nro_cuota, monto_usd, fecha_vencimiento) VALUES (?,?,?,?)", (v_id, i, monto_cuota, venc), commit=True)
+                    # 2. Generar las Cuotas con fecha incremental desde f_inicio_cuotas
+                    for i in range(1, v_cant_q + 1):
+                        venc = f_inicio_cuotas + timedelta(days=30 * (i-1))
+                        db_query("""INSERT INTO cuotas_lotes (id_venta, nro_cuota, monto_usd, fecha_vencimiento, pagado) 
+                                 VALUES (?,?,?,?,0)""", (v_id, i, v_monto_q, venc), commit=True)
                     
-                    # 3. Marcar lote como vendido
+                    # 3. Marcar lote como Vendido
                     db_query(f"UPDATE lotes SET estado='Vendido' WHERE id={id_l}", commit=True)
-                    st.success("Venta registrada y plan de cuotas generado.")
+                    st.success("Venta realizada y plan de cuotas generado.")
                     st.rerun()
 
-# --- 5. COBRANZAS Y RECIBOS (V.1.2 - CON PDF U$D) ---
+    # --- 5. COBRANZAS, MARCADOR HISTÓRICO Y CONSULTAS (V.2.8) ---
     with t_l5:
-        st.subheader("Cobranza de Cuotas y Entregas (U$D)")
+        st.subheader("💰 Gestión de Cobranzas y Estado de Cuentas")
         
-        query_pend = """
-            SELECT cl.id, co.nombre as Comprador, l.manzana, l.nro_lote, 
-                   cl.nro_cuota, cl.monto_usd, vl.id_lote, vl.id_comprador
-            FROM cuotas_lotes cl
-            JOIN ventas_lotes vl ON cl.id_venta = vl.id
-            JOIN compradores co ON vl.id_comprador = co.id
-            JOIN lotes l ON vl.id_lote = l.id
-            WHERE cl.pagado = 0
-        """
-        df_p = db_query(query_pend)
+        sub_tab1, sub_tab2 = st.tabs(["💵 Cobrar / Marcar Pagado", "📊 Consultas y Totales"])
         
-        if df_p is not None and not df_p.empty:
-            with st.form("f_cobro_lote_pdf"):
-                sel_id = st.selectbox("Seleccione cuota a cobrar", df_p['id'].tolist(), 
-                                      format_func=lambda x: f"{df_p[df_p['id']==x]['Comprador'].values[0]} - Mz {df_p[df_p['id']==x]['manzana'].values[0]} Lote {df_p[df_p['id']==x]['nro_lote'].values[0]} - Cuota {df_p[df_p['id']==x]['nro_cuota'].values[0]}")
-                
-                row_p = df_p[df_p['id'] == sel_id].iloc[0]
-                m_cobro = st.number_input("Confirmar Monto U$D", value=float(row_p['monto_usd']))
-                
-                if st.form_submit_button("✅ COBRAR Y GENERAR RECIBO"):
-                    # 1. Update en DB
-                    db_query("UPDATE cuotas_lotes SET pagado=1, monto_pagado_usd=?, fecha_pago=? WHERE id=?", (m_cobro, date.today(), sel_id), commit=True)
+        with sub_tab1:
+            # Traemos cuotas impagas
+            query_q = """
+                SELECT cl.id, d.nombre as Loteo, l.manzana, l.nro_lote, co.nombre as Cliente, 
+                       cl.nro_cuota, cl.monto_usd, cl.fecha_vencimiento
+                FROM cuotas_lotes cl
+                JOIN ventas_lotes vl ON cl.id_venta = vl.id
+                JOIN lotes l ON vl.id_lote = l.id
+                JOIN desarrollos d ON l.id_desarrollo = d.id
+                JOIN compradores co ON vl.id_comprador = co.id
+                WHERE cl.pagado = 0
+            """
+            df_q = db_query(query_q)
+            
+            if df_q is not None and not df_q.empty:
+                with st.form("f_cobro_lote"):
+                    sel_q = st.selectbox("Seleccione Cuota para operar", df_q['id'].tolist(),
+                        format_func=lambda x: f"{df_q[df_q['id']==x]['Cliente'].values[0]} | {df_q[df_q['id']==x]['Loteo'].values[0]} Mz {df_q[df_q['id']==x]['manzana'].values[0]} Lote {df_q[df_q['id']==x]['nro_lote'].values[0]} | Q:{df_q[df_q['id']==x]['nro_cuota'].values[0]} | Vence: {df_q[df_q['id']==x]['fecha_vencimiento'].values[0]}")
                     
-                    # 2. Datos para el PDF
-                    datos_p = {'monto': m_cobro, 'concepto': f"Cuota Nro {row_p['nro_cuota']}"}
-                    datos_c = {'nombre': row_p['Comprador']}
-                    datos_l = {'manzana': row_p['manzana'], 'nro_lote': row_p['nro_lote']}
+                    c_mon = st.number_input("Monto a cobrar (U$D o Pesos según pactado)", value=float(df_q[df_q['id'] == sel_q]['monto_usd'].values[0]))
                     
-                    # 3. Generar y persistir
-                    pdf_lote = generar_pdf_lote(datos_p, datos_c, datos_l)
-                    st.session_state['pdf_lote_ready'] = bytes(pdf_lote)
-                    st.success("¡Cobro registrado con éxito!")
-                    st.rerun()
+                    col_b1, col_b2 = st.columns(2)
+                    op_cobrar = col_b1.form_submit_button("✅ REGISTRAR PAGO (CAJA)")
+                    op_marcar = col_b2.form_submit_button("📁 MARCAR COMO PAGADA (HISTÓRICO)")
+                    
+                    if op_cobrar or op_marcar:
+                        # Si es "marcar", no debería afectar la caja del día si es histórico, 
+                        # pero para simplicidad administrativa, ambos marcan pagado=1
+                        db_query("UPDATE cuotas_lotes SET pagado=1, monto_pagado_usd=?, fecha_pago=? WHERE id=?", 
+                                 (c_mon, date.today(), sel_q), commit=True)
+                        st.success("Operación registrada.")
+                        st.rerun()
+            else:
+                st.info("No hay cuotas pendientes de cobro.")
 
-        # Botón de descarga fuera del form
-        if 'pdf_lote_ready' in st.session_state:
-            st.write("---")
-            st.download_button(
-                label="📥 DESCARGAR RECIBO U$D",
-                data=st.session_state['pdf_lote_ready'],
-                file_name=f"Recibo_Lote_{date.today()}.pdf",
-                mime="application/pdf"
-            )
-            if st.button("Limpiar"):
-                del st.session_state['pdf_lote_ready']
-                st.rerun()
-
+        with sub_tab2:
+            st.markdown("### Consultas de Cartera")
+            
+            # Filtros de consulta
+            c_f1, c_f2 = st.columns(2)
+            f_loteo = c_f1.selectbox("Filtrar por Loteo", ["Todos"] + db_query("SELECT nombre FROM desarrollos")['nombre'].tolist())
+            f_estado = c_f2.selectbox("Estado", ["Todas", "Pagadas", "Impagas / Vencidas"])
+            
+            # Construcción de la query dinámica para el reporte
+            q_rep = """
+                SELECT d.nombre as Loteo, l.manzana as Mz, l.nro_lote as Lote, co.nombre as Cliente,
+                       cl.nro_cuota as [Q#], cl.monto_usd as Monto, cl.fecha_vencimiento as Vencimiento,
+                       CASE WHEN cl.pagado = 1 THEN 'PAGADA' ELSE 'IMPAGA' END as Estado
+                FROM cuotas_lotes cl
+                JOIN ventas_lotes vl ON cl.id_venta = vl.id
+                JOIN lotes l ON vl.id_lote = l.id
+                JOIN desarrollos d ON l.id_desarrollo = d.id
+                JOIN compradores co ON vl.id_comprador = co.id
+                WHERE 1=1
+            """
+            if f_loteo != "Todos": q_rep += f" AND d.nombre = '{f_loteo}'"
+            if f_estado == "Pagadas": q_rep += " AND cl.pagado = 1"
+            if f_estado == "Impagas / Vencidas": q_rep += " AND cl.pagado = 0"
+            
+            df_rep = db_query(q_rep)
+            
+            if df_rep is not None and not df_rep.empty:
+                # Formateo visual
+                df_rep_v = df_rep.copy()
+                df_rep_v['Monto'] = df_rep_v['Monto'].apply(f_m)
+                st.dataframe(df_rep_v, use_container_width=True, hide_index=True)
+                
+                # Totales
+                total_m = df_rep['Monto'].sum()
+                st.metric(label=f"Total en Selección ({f_estado})", value=f"U$D / $ {f_m(total_m)}")
 
 # ==========================================
 # 1. INVENTARIO (V.6.8 - VISTA LIMPIA)
