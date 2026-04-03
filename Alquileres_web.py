@@ -1328,30 +1328,66 @@ elif menu == "🌳 Lotes":
                 st.dataframe(df_lotes, use_container_width=True, hide_index=True)
 
                 
-    # --- 3. COMPRADORES (ABM) ---
+    # --- 3. GESTIÓN DE COMPRADORES (V.2.7 - ID AUTOMÁTICO Y REFRESCO) ---
     with t_l3:
-        st.subheader("Gestión de Compradores")
-        with st.expander("👤 Nuevo / Editar Comprador"):
-            with st.form("f_comp_edit"):
-                id_c_e = st.number_input("ID para editar (0 para nuevo)", min_value=0)
-                nom = st.text_input("Nombre Completo")
-                doc = st.text_input("DNI / CUIT")
-                cel = st.text_input("Celular")
-                if st.form_submit_button("Guardar Comprador"):
-                    if id_c_e == 0:
-                        db_query("INSERT INTO compradores (nombre, dni_cuit, celular) VALUES (?,?,?)", (nom, doc, cel), commit=True)
-                    else:
-                        db_query("UPDATE compradores SET nombre=?, dni_cuit=?, celular=? WHERE id=?", (nom, doc, cel, id_c_e), commit=True)
-                    st.rerun()
-        
-        df_c = db_query("SELECT * FROM compradores")
-        if df_c is not None:
-            st.dataframe(df_c, hide_index=True)
-            id_c_del = st.number_input("ID Comprador a eliminar", min_value=0)
-            if st.button("🗑️ Eliminar Comprador"):
-                db_query(f"DELETE FROM compradores WHERE id={id_c_del}", commit=True)
-                st.rerun()
+        st.subheader("👤 Registro de Compradores")
 
+        # 1. Formulario de Alta (Sin campo ID, es automático)
+        with st.expander("➕ Registrar Nuevo Comprador", expanded=True):
+            with st.form("f_comprador_nuevo", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                nombre_c = c1.text_input("Nombre y Apellido / Razón Social")
+                dni_c = c1.text_input("DNI / CUIT")
+                cel_c = c2.text_input("Teléfono Celular")
+                mail_c = c2.text_input("Correo Electrónico")
+                domicilio_c = st.text_input("Domicilio Real")
+                
+                btn_guardar_c = st.form_submit_button("💾 GUARDAR COMPRADOR")
+                
+                if btn_guardar_c:
+                    if nombre_c.strip() == "":
+                        st.error("El nombre es obligatorio para el registro.")
+                    else:
+                        try:
+                            # INSERT con ID Automático (NULL en la PK)
+                            sql_ins_comp = """
+                                INSERT INTO compradores (nombre, dni_cuit, celular, domicilio, email) 
+                                VALUES (?, ?, ?, ?, ?)
+                            """
+                            nuevo_id_c = db_query(sql_ins_comp, 
+                                                (nombre_c, dni_c, cel_c, domicilio_c, mail_c), 
+                                                commit=True)
+                            
+                            st.success(f"✅ Comprador registrado con éxito. ID Sistema: {nuevo_id_c}")
+                            st.rerun() # Fuerza la actualización de la tabla de abajo
+                        except Exception as e:
+                            st.error(f"Error al guardar en base de datos: {e}")
+
+        # 2. Listado de Compradores (Siempre visible abajo)
+        st.write("---")
+        st.subheader("📋 Base de Datos de Compradores")
+        
+        # Consultamos los datos (Asignamos alias para que la tabla sea legible)
+        df_comp_list = db_query("""
+            SELECT id as ID, nombre as Nombre, dni_cuit as [DNI/CUIT], 
+                   celular as Celular, email as [E-mail] 
+            FROM compradores 
+            ORDER BY id DESC
+        """)
+        
+        if df_comp_list is not None and not df_comp_list.empty:
+            # Mostramos la tabla ocupando todo el ancho
+            st.dataframe(df_comp_list, use_container_width=True, hide_index=True)
+            
+            # Opción de eliminación rápida
+            with st.expander("🗑️ Zona de Eliminación"):
+                id_eliminar_c = st.number_input("ID de Comprador a borrar", min_value=1, step=1, key="del_comp_id")
+                if st.button("❌ ELIMINAR REGISTRO SELECCIONADO", key="btn_del_comp"):
+                    db_query(f"DELETE FROM compradores WHERE id={id_eliminar_c}", commit=True)
+                    st.warning(f"Registro ID {id_eliminar_c} eliminado.")
+                    st.rerun()
+        else:
+            st.info("Aún no hay compradores registrados en el sistema.")
 
     # --- 4. VENTAS ---
     with t_l4:
