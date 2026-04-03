@@ -1149,9 +1149,25 @@ elif menu == "⚙️ Maestros":
             if st.button("🔥 RESET SISTEMA"):
                 if cod_m == "3280":
                     with sqlite3.connect('datos_alquileres.db') as conn:
-                        for t in ['bloques','inmuebles','inquilinos','contratos','deudas',
-                                  'desarrollo','lotes','compradores','ventas_lotes','cuotas_lotes']:
+
+                        # ORDEN CORRECTO DE BORRADO (V.15.5)
+                        tablas_ordenadas = [
+                            'cuotas_lotes',   # 1. Depende de ventas_lotes
+                            'ventas_lotes',   # 2. Depende de lotes y compradores
+                            'deudas',         # 3. Depende de contratos
+                            'contratos',      # 4. Depende de inmuebles e inquilinos
+                            'lotes',          # 5. Depende de desarrollos
+                            'inmuebles',      # 6. Depende de bloques
+                            'bloques',        # 7. Básica
+                            'inquilinos',     # 8. Básica
+                            'compradores',    # 9. Básica
+                            'desarrollos'     # 10. Básica
+                        ]
+
+                        # Luego aplicás el borrado:
+                        for t in tablas_ordenadas:
                             conn.execute(f"DELETE FROM {t}")
+
                     st.warning("Base de datos vaciada por completo.")
                     st.rerun()
                 else:
