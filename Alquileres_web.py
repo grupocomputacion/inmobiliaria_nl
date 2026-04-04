@@ -1490,19 +1490,39 @@ elif menu == "🌳 Lotes":
             else:
                 st.info("No hay cuotas pendientes de cobro.")
 
-        with sub_tab2:
-            st.markdown("### Consultas de Cartera")
+with sub_tab2:
+            st.subheader("🔍 Filtros Avanzados de Cartera")
             
-            # Filtros de consulta
-            c_f1, c_f2 = st.columns(2)
-            f_loteo = c_f1.selectbox("Filtrar por Loteo", ["Todos"] + db_query("SELECT nombre FROM desarrollos")['nombre'].tolist())
-            f_estado = c_f2.selectbox("Estado", ["Todas", "Pagadas", "Impagas / Vencidas"])
+            # --- FILTROS ---
+            f_loteos_df = db_query("SELECT nombre FROM desarrollos")
+            lista_loteos = ["Todos"] + f_loteos_df['nombre'].tolist() if f_loteos_df is not None else ["Todos"]
             
-            # Construcción de la query dinámica para el reporte
-            q_rep = """
+            c_f1, c_f2, c_f3 = st.columns(3)
+            sel_loteo = c_f1.selectbox("Filtrar por Loteo", lista_loteos)
+            sel_mz = c_f2.text_input("Manzana (opcional)")
+            sel_lt = c_f3.text_input("Lote (opcional)")
+            
+            c_f4, c_f5, c_f6 = st.columns(3)
+            # Filtro de Mes/Año
+            meses = ["Todos", "01","02","03","04","05","06","07","08","09","10","11","12"]
+            sel_mes = c_f4.selectbox("Mes de Vencimiento", meses)
+            sel_anio = c_f5.number_input("Año de Vencimiento", min_value=2020, max_value=2035, value=2026)
+            
+            # Filtro de Estado Detallado
+            sel_estado = c_f6.selectbox("Estado de Cuota", 
+                                       ["Todas", "Pagadas", "Impagas (A vencer)", "VENCIDAS (Mora)"])
+
+            # --- CONSTRUCCIÓN DE QUERY DINÁMICA ---
+            hoy_str = date.today().strftime('%Y-%m-%d')
+            
+            q_rep = f"""
                 SELECT d.nombre as Loteo, l.manzana as Mz, l.nro_lote as Lote, co.nombre as Cliente,
                        cl.nro_cuota as [Q#], cl.monto_usd as Monto, cl.fecha_vencimiento as Vencimiento,
-                       CASE WHEN cl.pagado = 1 THEN 'PAGADA' ELSE 'IMPAGA' END as Estado
+                       CASE 
+                            WHEN cl.pagado = 1 THEN 'PAGADA'
+                            WHEN cl.pagado = 0 AND cl.fecha_vencimiento < '{hoy_str}' THEN 'VENCIDA'
+                            ELSE 'A VENCER'
+                       END as Estado_Real
                 FROM cuotas_lotes cl
                 JOIN ventas_lotes vl ON cl.id_venta = vl.id
                 JOIN lotes l ON vl.id_lote = l.id
@@ -1510,21 +1530,53 @@ elif menu == "🌳 Lotes":
                 JOIN compradores co ON vl.id_comprador = co.id
                 WHERE 1=1
             """
-            if f_loteo != "Todos": q_rep += f" AND d.nombre = '{f_loteo}'"
-            if f_estado == "Pagadas": q_rep += " AND cl.pagado = 1"
-            if f_estado == "Impagas / Vencidas": q_rep += " AND cl.pagado = 0"
             
-            df_rep = db_query(q_rep)
+            # Aplicación de filtros lógicos
+            if sel_loteo != "Todos": q_rep += f" AND d.nombre = '{sel_loteo}'"
+            if sel_mz: q_rep += f" AND l.manzana = '{sel_mz}'"
+            if sel_lt: q_rep += f" AND l.nro_lote = '{sel_lt}'"
             
-            if df_rep is not None and not df_rep.empty:
-                # Formateo visual
-                df_rep_v = df_rep.copy()
-                df_rep_v['Monto'] = df_rep_v['Monto'].apply(f_m)
-                st.dataframe(df_rep_v, use_container_width=True, hide_index=True)
+            if sel_mes != "Todos":
+                # Formato SQLite para filtrar por mes/año en strings YYYY-MM-DD
+                q_rep += f" AND strftime('%m', cl.fecha_vencimiento) = '{sel_mes}'"
+                q_rep += f" AND strftime('%Y', cl.fecha_vencimiento) = '{sel_anio}'"
+
+            # Filtro de estado por lógica de fecha
+            if sel_estado == "Pagadas": 
+                q_rep += " AND cl.pagado = 1"
+            elif sel_estado == "Impagas (A vencer)": 
+                q_rep += f" AND cl.pagado = 0 AND cl.fecha_vencimiento >= '{hoy_str}'"
+            elif sel_estado == "VENCIDAS (Mora)": 
+                q_rep += f" AND cl.pagado = 0 AND cl.fecha_vencimiento < '{hoy_str}'"
+            
+            df_final = db_query(q_rep)
+            
+            if df_final is not None and not df_final.empty:
+                st.write(f"Resultados: {len(df_final)} cuotas encontradas.")
                 
-                # Totales
-                total_m = df_rep['Monto'].sum()
-                st.metric(label=f"Total en Selección ({f_estado})", value=f"U$D / $ {f_m(total_m)}")
+                # Visualización
+                df_v = df_final.copy()
+                df_v['Monto'] = df_v['Monto'].apply(f_m)
+                st.dataframe(df_v, use_container_width=True, hide_index=True)
+                
+                # Totales y Exportación
+                total_nro = df_final['Monto'].sum()
+                c_res1, c_res2 = st.columns([2,1])
+                c_res1.metric("TOTAL FILTRADO", f"U$D / $ {f_m(total_nro)}")
+                
+                # --- EXPORTAR A EXCEL ---
+                output_xlsx = io.BytesIO()
+                with pd.ExcelWriter(output_xlsx, engine='xlsxwriter') as writer:
+                    df_final.to_excel(writer, index=False, sheet_name='Cobranzas_Filtradas')
+                
+                c_res2.download_button(
+                    label="📥 EXPORTAR A EXCEL",
+                    data=output_xlsx.getvalue(),
+                    file_name=f"Reporte_Cobranzas_{sel_loteo}_{sel_mes}_{sel_anio}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            else:
+                st.info("No se encontraron registros con los filtros seleccionados.")
 
 # ==========================================
 # 1. INVENTARIO (V.6.8 - VISTA LIMPIA)
