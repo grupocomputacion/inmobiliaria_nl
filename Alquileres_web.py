@@ -1490,7 +1490,7 @@ elif menu == "🌳 Lotes":
             else:
                 st.info("No hay cuotas pendientes de cobro.")
 
-with sub_tab2:
+        with sub_tab2:
             st.subheader("🔍 Filtros Avanzados de Cartera")
             
             # --- FILTROS ---
